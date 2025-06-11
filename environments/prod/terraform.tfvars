@@ -44,6 +44,32 @@ alarm_cpu_threshold         = 75           # Alert at 75% CPU
 alarm_disk_space_threshold  = 10737418240  # Alert at 10GB free space
 alarm_connections_threshold = 80           # Alert at 80 connections
 
+# S3 Configuration - Production security and compliance
+s3_encryption_type           = "aws:kms"   # KMS encryption for production
+s3_kms_key_id               = ""          # Will use default KMS key (or specify custom)
+s3_enable_versioning         = true        # Required for compliance
+s3_enable_lifecycle_rules    = true        # Cost optimization
+
+# S3 Lifecycle - Production retention
+s3_processed_transition_days = 90          # Keep in standard for 3 months
+s3_processed_glacier_days    = 180         # Move to Glacier after 6 months
+s3_processed_expiration_days = 2555        # Keep for 7 years (compliance)
+s3_failed_expiration_days    = 90          # Keep failed files for investigation
+s3_incoming_expiration_days  = 30          # Alert if files unprocessed for 30 days
+s3_noncurrent_version_expiration_days = 90 # Keep old versions for 3 months
+
+# S3 Features - Production
+s3_enable_event_notifications = false      # Will enable with Lambda deployment
+s3_enable_eventbridge        = true        # Enable for complex routing
+s3_enable_cors               = false       # Enable when web app is ready
+s3_enable_logging            = true        # Required for audit
+s3_log_retention_days        = 90          # Keep logs for 3 months
+s3_create_cloudwatch_alarms  = true        # All alarms enabled
+
+# S3 Alarms - Production thresholds
+s3_bucket_size_alarm_threshold  = 1099511627776  # 1 TB
+s3_object_count_alarm_threshold = 100000         # 100,000 objects
+
 # Tags
 tags = {
   Environment    = "production"
@@ -55,4 +81,5 @@ tags = {
   BackupRequired = "true"
   Compliance     = "HIPAA"
   CriticalSystem = "true"
+  DataRetention = "7years"
 }

@@ -71,6 +71,56 @@ module "rds" {
   depends_on = [module.vpc]
 }
 
+module "s3" {
+  source = "./modules/s3"
+  
+  # Basic configuration
+  project_name = var.project_name
+  environment  = var.environment
+  
+  # Bucket configuration
+  bucket_name = var.s3_bucket_name
+  
+  # Encryption
+  encryption_type = var.s3_encryption_type
+  kms_key_id     = var.s3_kms_key_id
+  
+  # Features
+  enable_versioning      = var.s3_enable_versioning
+  enable_lifecycle_rules = var.s3_enable_lifecycle_rules
+  
+  # Lifecycle configuration
+  processed_transition_days         = var.s3_processed_transition_days
+  processed_glacier_days           = var.s3_processed_glacier_days
+  processed_expiration_days        = var.s3_processed_expiration_days
+  failed_expiration_days           = var.s3_failed_expiration_days
+  incoming_expiration_days         = var.s3_incoming_expiration_days
+  noncurrent_version_expiration_days = var.s3_noncurrent_version_expiration_days
+  
+  # Event notifications (Lambda trigger will be added later)
+  enable_event_notifications = var.s3_enable_event_notifications
+  lambda_function_arn       = var.s3_lambda_function_arn
+  enable_eventbridge        = var.s3_enable_eventbridge
+  
+  # CORS
+  enable_cors          = var.s3_enable_cors
+  cors_allowed_origins = var.s3_cors_allowed_origins
+  
+  # Logging
+  enable_logging     = var.s3_enable_logging
+  logging_bucket     = var.s3_logging_bucket
+  log_retention_days = var.s3_log_retention_days
+  
+  # Monitoring
+  create_cloudwatch_alarms     = var.s3_create_cloudwatch_alarms
+  bucket_size_alarm_threshold  = var.s3_bucket_size_alarm_threshold
+  object_count_alarm_threshold = var.s3_object_count_alarm_threshold
+  alarm_sns_topic_arns        = var.s3_alarm_sns_topic_arns
+  
+  # Tags
+  tags = var.tags
+}
+
 # Outputs
 output "infrastructure_summary" {
   description = "Summary of deployed infrastructure"
@@ -86,12 +136,20 @@ output "infrastructure_summary" {
     }
     
     rds = {
-      endpoint      = module.rds.db_instance_endpoint
-      port          = module.rds.db_instance_port
-      database_name = module.rds.db_name
+      endpoint       = module.rds.db_instance_endpoint
+      port           = module.rds.db_instance_port
+      database_name  = module.rds.db_name
       instance_class = module.rds.db_instance_class
-      multi_az      = module.rds.db_instance_multi_az
-      storage_gb    = module.rds.db_instance_allocated_storage
+      multi_az       = module.rds.db_instance_multi_az
+      storage_gb     = module.rds.db_instance_allocated_storage
+    }
+    
+    s3 = {
+      bucket_name      = module.s3.bucket_id
+      incoming_folder  = module.s3.incoming_folder_uri
+      processed_folder = module.s3.processed_folder_uri
+      encryption       = module.s3.encryption_type
+      versioning       = module.s3.versioning_enabled
     }
   }
 }
@@ -114,4 +172,15 @@ output "database_password" {
   description = "Database password (only if auto-generated)"
   value       = module.rds.db_password
   sensitive   = true
+}
+
+output "s3_bucket_info" {
+  description = "S3 bucket information for REDCap exports"
+  value = {
+    bucket_name      = module.s3.bucket_id
+    bucket_arn       = module.s3.bucket_arn
+    incoming_folder  = module.s3.incoming_folder_uri
+    processed_folder = module.s3.processed_folder_uri
+    failed_folder    = module.s3.failed_folder_uri
+  }
 }

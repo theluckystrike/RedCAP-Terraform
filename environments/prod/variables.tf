@@ -214,6 +214,150 @@ variable "apply_immediately" {
   default     = false
 }
 
+# S3 Variables
+variable "s3_bucket_name" {
+  description = "Name of the S3 bucket (leave empty for auto-generated)"
+  type        = string
+  default     = ""
+}
+
+variable "s3_encryption_type" {
+  description = "S3 encryption type (AES256 or aws:kms)"
+  type        = string
+  default     = "AES256"
+}
+
+variable "s3_kms_key_id" {
+  description = "KMS key ID for S3 encryption"
+  type        = string
+  default     = ""
+}
+
+variable "s3_enable_versioning" {
+  description = "Enable S3 bucket versioning"
+  type        = bool
+  default     = true
+}
+
+variable "s3_enable_lifecycle_rules" {
+  description = "Enable S3 lifecycle rules"
+  type        = bool
+  default     = true
+}
+
+# S3 Lifecycle Variables
+variable "s3_processed_transition_days" {
+  description = "Days before transitioning processed files to IA"
+  type        = number
+  default     = 30
+}
+
+variable "s3_processed_glacier_days" {
+  description = "Days before transitioning processed files to Glacier"
+  type        = number
+  default     = 90
+}
+
+variable "s3_processed_expiration_days" {
+  description = "Days before deleting processed files"
+  type        = number
+  default     = 365
+}
+
+variable "s3_failed_expiration_days" {
+  description = "Days before deleting failed files"
+  type        = number
+  default     = 30
+}
+
+variable "s3_incoming_expiration_days" {
+  description = "Days before deleting unprocessed incoming files"
+  type        = number
+  default     = 7
+}
+
+variable "s3_noncurrent_version_expiration_days" {
+  description = "Days before deleting noncurrent versions"
+  type        = number
+  default     = 30
+}
+
+# S3 Event Variables
+variable "s3_enable_event_notifications" {
+  description = "Enable S3 event notifications"
+  type        = bool
+  default     = true
+}
+
+variable "s3_lambda_function_arn" {
+  description = "Lambda function ARN for S3 triggers"
+  type        = string
+  default     = ""
+}
+
+variable "s3_enable_eventbridge" {
+  description = "Enable EventBridge integration"
+  type        = bool
+  default     = false
+}
+
+# S3 CORS Variables
+variable "s3_enable_cors" {
+  description = "Enable CORS configuration"
+  type        = bool
+  default     = false
+}
+
+variable "s3_cors_allowed_origins" {
+  description = "Allowed origins for CORS"
+  type        = list(string)
+  default     = ["*"]
+}
+
+# S3 Logging Variables
+variable "s3_enable_logging" {
+  description = "Enable S3 access logging"
+  type        = bool
+  default     = true
+}
+
+variable "s3_logging_bucket" {
+  description = "Target bucket for logs"
+  type        = string
+  default     = ""
+}
+
+variable "s3_log_retention_days" {
+  description = "Days to retain S3 access logs"
+  type        = number
+  default     = 30
+}
+
+# S3 Monitoring Variables
+variable "s3_create_cloudwatch_alarms" {
+  description = "Create CloudWatch alarms for S3"
+  type        = bool
+  default     = true
+}
+
+variable "s3_bucket_size_alarm_threshold" {
+  description = "Bucket size threshold in bytes"
+  type        = number
+  default     = 107374182400  # 100 GB
+}
+
+variable "s3_object_count_alarm_threshold" {
+  description = "Object count threshold"
+  type        = number
+  default     = 10000
+}
+
+variable "s3_alarm_sns_topic_arns" {
+  description = "SNS topics for S3 alarms"
+  type        = list(string)
+  default     = []
+}
+
 # Tags
 variable "tags" {
   description = "Additional tags to apply to all resources"
