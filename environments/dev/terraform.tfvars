@@ -45,12 +45,11 @@ s3_failed_expiration_days    = 7           # Delete failed files after 1 week
 s3_incoming_expiration_days  = 3           # Delete unprocessed files after 3 days
 
 # S3 Features
-s3_enable_event_notifications = false      # No Lambda trigger yet
+s3_enable_event_notifications = true       # Lambda Function trigger
 s3_enable_eventbridge        = false       # No EventBridge in dev
 s3_enable_cors               = false       # No CORS needed yet
 s3_enable_logging            = false       # No access logs in dev (save costs)
 s3_create_cloudwatch_alarms  = false       # No alarms in dev
-
 
 # Tags
 tags = {

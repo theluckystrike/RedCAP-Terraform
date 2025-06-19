@@ -9,6 +9,19 @@ module "vpc" {
   create_ha_nat       = var.create_ha_nat
 }
 
+# Lambda Module
+module "lambda" {
+  source              = "../../modules/lambda"
+  project_name        = var.project_name
+  environment         = var.environment
+  lambda_package_path = "lambda_function.zip"
+  db_host             = var.db_host
+  db_name             = var.db_name
+  db_user             = var.db_username
+  db_password         = var.db_password
+  tags                = var.tags
+}
+
 # RDS Module
 module "rds" {
   source = "./modules/rds"
@@ -100,6 +113,7 @@ module "s3" {
   enable_event_notifications = var.s3_enable_event_notifications
   lambda_function_arn       = var.s3_lambda_function_arn
   enable_eventbridge        = var.s3_enable_eventbridge
+  lambda_function_arn = module.lambda.lambda_function_arn
   
   # CORS
   enable_cors          = var.s3_enable_cors
