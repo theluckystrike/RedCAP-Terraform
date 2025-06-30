@@ -17,3 +17,14 @@ output "db_subnet_ids" {
 output "availability_zones" {
   value = data.aws_availability_zones.available.names
 }
+
+output "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  value       = aws_vpc.main.cidr_block
+}
+
+output "nat_gateway_ids" {
+  description = "List of NAT Gateway IDs"
+  value       = aws_nat_gateway.nat[*].id
+}
+

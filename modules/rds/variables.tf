@@ -22,6 +22,13 @@ variable "vpc_id" {
 variable "database_subnet_ids" {
   description = "List of database subnet IDs from VPC module"
   type        = list(string)
+  default     = null
+}
+
+variable "private_route_table_id" {
+  description = "Private route table ID from the VPC module"
+  type        = string
+  default     = null  # optional, if you want to make it optional
 }
 
 variable "lambda_security_group_id" {
@@ -96,7 +103,7 @@ variable "storage_type" {
 variable "engine_version" {
   description = "PostgreSQL engine version"
   type        = string
-  default     = "15.4"
+  default     = "15"
 }
 
 variable "parameter_group_family" {

@@ -129,6 +129,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "redcap_exports" {
     id     = "abort-incomplete-uploads"
     status = "Enabled"
 
+    filter {} # Required even if no prefix
+
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
@@ -199,10 +201,9 @@ resource "aws_s3_bucket_notification" "lambda_trigger" {
 
 # Lambda permission for S3 to invoke function
 resource "aws_lambda_permission" "allow_s3" {
-  count         = var.lambda_function_arn != "" ? 1 : 0
   statement_id  = "AllowExecutionFromS3Bucket"
   action        = "lambda:InvokeFunction"
-  function_name = var.lambda_function_arn
+  function_name = var.lambda_function_name
   principal     = "s3.amazonaws.com"
   source_arn    = aws_s3_bucket.redcap_exports.arn
 }
@@ -261,6 +262,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
     id     = "cleanup-old-logs"
     status = "Enabled"
 
+    filter {} # <-- REQUIRED to satisfy provider
+
     expiration {
       days = var.log_retention_days
     }
@@ -269,15 +272,52 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 
 # Create folder structure
 resource "aws_s3_object" "folders" {
-  for_each = toset(local.folder_prefixes)
-  
+  for_each = var.s3_enable_lifecycle_rules ? toset(local.folder_prefixes) : toset([])
+
   bucket  = aws_s3_bucket.redcap_exports.id
   key     = each.value
   content = ""
-  
+
+  server_side_encryption = var.encryption_type
+  kms_key_id              = var.encryption_type == "aws:kms" ? var.kms_key_id : null
+
   depends_on = [
     aws_s3_bucket_server_side_encryption_configuration.redcap_exports
   ]
+}
+resource "null_resource" "s3_cleanup" {
+  triggers = {
+    bucket_name = aws_s3_bucket.redcap_exports.bucket
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<EOT
+bucket_name="${self.triggers.bucket_name}"
+
+# Delete object versions
+aws s3api list-object-versions --bucket "$bucket_name" \
+  --query 'Versions[].{Key:Key,VersionId:VersionId}' \
+  --output json > objects.json
+
+if [ -s objects.json ]; then
+  aws s3api delete-objects --bucket "$bucket_name" \
+    --delete file://objects.json || true
+fi
+
+# Delete delete markers
+aws s3api list-object-versions --bucket "$bucket_name" \
+  --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
+  --output json > markers.json
+
+if [ -s markers.json ]; then
+  aws s3api delete-objects --bucket "$bucket_name" \
+    --delete file://markers.json || true
+fi
+EOT
+  }
+
+  depends_on = [aws_s3_bucket.redcap_exports]
 }
 
 # CloudWatch metric alarm for bucket size

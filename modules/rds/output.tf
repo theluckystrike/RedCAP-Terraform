@@ -11,10 +11,15 @@ output "db_instance_arn" {
   value       = aws_db_instance.main.arn
 }
 
+output "rds_sg_id" {
+  value = aws_security_group.rds.id
+}
+
 output "db_instance_resource_id" {
   description = "The RDS resource ID"
   value       = aws_db_instance.main.resource_id
 }
+
 
 # Connection Information
 output "db_instance_endpoint" {

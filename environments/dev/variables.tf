@@ -8,6 +8,17 @@ variable "project" {
   type        = string
 }
 
+variable "project_name" {
+  description = "Name of the project"
+  type        = string
+}
+
+variable "db_host" {
+  description = "Database hostname"
+  type        = string
+  default     = ""
+}
+
 variable "vpc_cidr" {
   description = "CIDR for VPC"
   type        = string
@@ -49,6 +60,12 @@ variable "enable_nat_gateway" {
   description = "Enable NAT Gateway for private subnets"
   type        = bool
   default     = true
+}
+
+variable "low_logs_retention_days" {
+  description = "Retention period for logs in dev"
+  type        = number
+  default     = 7
 }
 
 variable "single_nat_gateway" {
@@ -256,6 +273,18 @@ variable "s3_processed_glacier_days" {
   description = "Days before transitioning processed files to Glacier"
   type        = number
   default     = 90
+}
+
+variable "database_subnet_ids" {
+  description = "Subnet IDs for the RDS subnet group"
+  type        = list(string)
+  default     = null 
+}
+
+variable "aws_region" {
+  description = "AWS region to deploy resources"
+  type        = string
+  default     = "ap-southeast-2"  # or whatever region you're using
 }
 
 variable "s3_processed_expiration_days" {

@@ -61,11 +61,10 @@ resource "aws_subnet" "db" {
 }
 
 # ─────────────────────────────────────────────
-# Elastic IPs & NAT Gateways (Conditional HA)
+# NAT Gateways
 # ─────────────────────────────────────────────
 resource "aws_eip" "nat" {
   count = var.create_ha_nat ? length(var.public_subnet_cidrs) : 1
-  vpc   = true
   tags = {
     Name = "${var.project}-${var.environment}-nat-eip-${count.index + 1}"
   }
@@ -103,27 +102,60 @@ resource "aws_route_table_association" "public" {
 }
 
 # ─────────────────────────────────────────────
-# Private Route Tables (1 per subnet)
+# Private Route Table - Shared (non-HA)
 # ─────────────────────────────────────────────
-resource "aws_route_table" "private" {
-  count  = length(var.private_subnet_cidrs)
+resource "aws_route_table" "private_shared" {
+  count  = var.create_ha_nat ? 0 : 1
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "${var.project}-${var.environment}-private-rt-shared"
+  }
+}
+
+resource "aws_route" "private_nat_shared" {
+  count                  = var.create_ha_nat ? 0 : 1
+  route_table_id         = aws_route_table.private_shared[0].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat[0].id
+}
+
+resource "aws_route_table_association" "private_shared" {
+  count          = var.create_ha_nat ? 0 : length(var.private_subnet_cidrs)
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private_shared[0].id
+}
+
+# ─────────────────────────────────────────────
+# Private Route Tables - HA (one per subnet)
+# ─────────────────────────────────────────────
+resource "aws_route_table" "private_ha" {
+  count  = var.create_ha_nat ? length(var.private_subnet_cidrs) : 0
   vpc_id = aws_vpc.main.id
   tags = {
     Name = "${var.project}-${var.environment}-private-rt-${count.index + 1}"
   }
 }
 
-resource "aws_route" "private_nat" {
-  count                  = length(var.private_subnet_cidrs)
-  route_table_id         = aws_route_table.private[count.index].id
+resource "aws_route" "private_nat_ha" {
+  count                  = var.create_ha_nat ? length(var.private_subnet_cidrs) : 0
+  route_table_id         = aws_route_table.private_ha[count.index].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.nat[
-    var.create_ha_nat ? count.index : 0
-  ].id
+  nat_gateway_id         = aws_nat_gateway.nat[count.index].id
 }
 
-resource "aws_route_table_association" "private" {
-  count          = length(var.private_subnet_cidrs)
+resource "aws_route_table_association" "private_ha" {
+  count          = var.create_ha_nat ? length(var.private_subnet_cidrs) : 0
   subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private[count.index].id
+  route_table_id = aws_route_table.private_ha[count.index].id
+}
+
+# ─────────────────────────────────────────────
+# Outputs
+# ─────────────────────────────────────────────
+output "private_route_table_ids" {
+  value = var.create_ha_nat ? aws_route_table.private_ha[*].id : [aws_route_table.private_shared[0].id]
+}
+
+output "private_route_table_id" {
+  value = var.create_ha_nat ? null : aws_route_table.private_shared[0].id
 }

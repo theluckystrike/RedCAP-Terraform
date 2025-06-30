@@ -24,6 +24,7 @@ backup_retention_period         = 1               # Minimal backups
 skip_final_snapshot             = true            # Easy cleanup
 deletion_protection             = false           # Allow easy deletion
 
+
 # RDS Monitoring - Minimal
 
 enhanced_monitoring_interval    = 0           # Disabled to save costs
@@ -38,11 +39,12 @@ s3_enable_versioning         = true        # Keep versioning for safety
 s3_enable_lifecycle_rules    = true        # Enable lifecycle for cost savings
 
 # S3 Lifecycle - Aggressive cleanup for dev
-s3_processed_transition_days = 7           # Move to IA after 1 week
-s3_processed_glacier_days    = 30          # Move to Glacier after 1 month
+s3_processed_transition_days = 30           # Move to IA after 1 week
+s3_processed_glacier_days    = 60          # Move to Glacier after 1 month
 s3_processed_expiration_days = 90          # Delete after 3 months
 s3_failed_expiration_days    = 7           # Delete failed files after 1 week
 s3_incoming_expiration_days  = 3           # Delete unprocessed files after 3 days
+db_host                      = "mydb.cluster-xyz123.ap-south-1.rds.amazonaws.com"
 
 # S3 Features
 s3_enable_event_notifications = true       # Lambda Function trigger
@@ -50,6 +52,7 @@ s3_enable_eventbridge        = false       # No EventBridge in dev
 s3_enable_cors               = false       # No CORS needed yet
 s3_enable_logging            = false       # No access logs in dev (save costs)
 s3_create_cloudwatch_alarms  = false       # No alarms in dev
+s3_lambda_function_arn       = "arn:aws:lambda:ap-southeast-2:123456789012:function:process_excel_dev"
 
 # Tags
 tags = {

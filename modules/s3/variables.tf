@@ -15,6 +15,12 @@ variable "environment" {
   }
 }
 
+variable "lambda_function_name" {
+  description = "Name of the Lambda function for S3 trigger"
+  type        = string
+  default     = ""
+}
+
 variable "bucket_name" {
   description = "Name of the S3 bucket (leave empty for auto-generated name)"
   type        = string
@@ -146,6 +152,18 @@ variable "create_cloudwatch_alarms" {
   default     = true
 }
 
+variable "create_lambda_permission" {
+  description = "Whether to create the lambda permission"
+  type        = bool
+  default     = false
+}
+
+variable "lambda_security_group_id" {
+  description = "Optional SG ID of Lambda to allow PostgreSQL access"
+  type        = string
+  default     = null
+}
+
 variable "bucket_size_alarm_threshold" {
   description = "Bucket size threshold for alarm in bytes"
   type        = number
@@ -169,4 +187,10 @@ variable "tags" {
   description = "Additional tags to apply to all resources"
   type        = map(string)
   default     = {}
+}
+
+variable "s3_enable_lifecycle_rules" {
+  description = "Enable lifecycle rules and folder creation"
+  type        = bool
+  default     = true
 }

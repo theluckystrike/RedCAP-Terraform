@@ -2,7 +2,7 @@ import boto3
 import os
 import tempfile
 import openpyxl
-import psycopg2
+import pg8000
 
 def lambda_handler(event, context):
     s3 = boto3.client('s3')
@@ -21,9 +21,9 @@ def lambda_handler(event, context):
             else:
                 rows.append(row)
 
-    conn = psycopg2.connect(
+    conn = pg8000.connect(
         host=os.environ['DB_HOST'],
-        dbname=os.environ['DB_NAME'],
+        database=os.environ['DB_NAME'],
         user=os.environ['DB_USER'],
         password=os.environ['DB_PASSWORD'],
         port=5432

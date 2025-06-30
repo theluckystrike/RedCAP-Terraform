@@ -50,15 +50,25 @@ resource "aws_security_group" "rds" {
 
 # Allow PostgreSQL access from Lambda security group
 resource "aws_security_group_rule" "rds_from_lambda" {
-  count                    = var.lambda_security_group_id != "" ? 1 : 0
   type                     = "ingress"
   from_port                = 5432
   to_port                  = 5432
   protocol                 = "tcp"
-  source_security_group_id = var.lambda_security_group_id
   security_group_id        = aws_security_group.rds.id
-  description              = "PostgreSQL access from Lambda functions"
+  source_security_group_id = var.lambda_security_group_id
 }
+
+resource "aws_route_table_association" "rds_db_subnet_1" {
+  subnet_id      = var.database_subnet_ids[0]
+  route_table_id = var.private_route_table_id
+}
+
+resource "aws_route_table_association" "rds_db_subnet_2" {
+  subnet_id      = var.database_subnet_ids[1]
+  route_table_id = var.private_route_table_id
+}
+
+resource "null_resource" "skip_rds_lambda_rule" {}
 
 # Allow PostgreSQL access from specific CIDR blocks (for development/debugging)
 resource "aws_security_group_rule" "rds_from_cidr" {
@@ -92,50 +102,59 @@ resource "aws_db_parameter_group" "main" {
   parameter {
     name  = "shared_preload_libraries"
     value = "pg_stat_statements"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "log_statement"
     value = var.enable_query_logging ? "all" : "none"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "log_min_duration_statement"
     value = var.slow_query_log_threshold
+    apply_method = "pending-reboot"
   }
 
   # Connection settings for large number of fields
   parameter {
     name  = "max_connections"
     value = var.max_connections
+    apply_method = "pending-reboot"
   }
 
   # Memory settings (auto-tuned based on instance class)
   parameter {
     name  = "shared_buffers"
     value = "{DBInstanceClassMemory/4}"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "effective_cache_size"
     value = "{DBInstanceClassMemory*3/4}"
+    apply_method = "pending-reboot"
   }
 
   # Write performance
   parameter {
     name  = "checkpoint_completion_target"
     value = "0.9"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "wal_buffers"
     value = "-1"  # Auto-tuned
+    apply_method = "pending-reboot"
   }
 
   # Query performance
   parameter {
     name  = "random_page_cost"
     value = "1.1"  # SSD optimized
+    apply_method = "pending-reboot"
   }
 
   tags = merge(local.common_tags, {
