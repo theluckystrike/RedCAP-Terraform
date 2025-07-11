@@ -88,6 +88,24 @@ module "rds" {
   depends_on = [module.vpc]
 }
 
+module "carbone" {
+  source = "../../modules/carbone"
+
+  project_name           = var.project_name
+  environment            = var.environment
+
+  db_host                = var.db_host
+  db_name                = module.rds.db_name
+  db_user                = module.rds.db_username
+  db_password            = module.rds.db_password
+
+  processed_bucket_name  = module.s3.bucket_id
+  processed_bucket_arn   = module.s3.bucket_arn
+
+  carbone_api_token      = var.carbone_api_token
+  carbone_template_id    = var.carbone_template_id
+}
+
 module "s3" {
   source = "../../modules/s3"
 
