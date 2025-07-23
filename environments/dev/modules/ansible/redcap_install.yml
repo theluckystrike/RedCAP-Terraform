@@ -1,0 +1,38 @@
+- name: Install REDCap
+  hosts: redcap
+  become: true
+
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - apache2
+          - php
+          - php-mysql
+          - php-xml
+          - unzip
+          - mysql-client
+        update_cache: true
+
+    - name: Ensure REDCap directory exists
+      file:
+        path: /var/www/html/redcap
+        state: directory
+        owner: www-data
+        group: www-data
+
+    - name: Copy REDCap zip
+      copy:
+        src: files/redcap.zip
+        dest: /tmp/redcap.zip
+
+    - name: Unzip REDCap
+      unarchive:
+        src: /tmp/redcap.zip
+        dest: /var/www/html/redcap
+        remote_src: yes
+
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted

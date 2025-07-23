@@ -9,6 +9,16 @@ module "vpc" {
   create_ha_nat       = var.create_ha_nat
 }
 
+module "ec2_redcap" {
+  source           = "../../modules/ec2"
+  ami              = "ami-010876b9ddd38475e"
+  instance_type    = "t2.micro"
+  key_name         = var.key_name
+  private_key_path = var.private_key_path
+  vpc_id           = module.vpc.vpc_id
+  subnet_id        = module.vpc.public_subnet_ids[0]  # first public subnet
+}
+
 resource "aws_security_group" "lambda" {
   name_prefix = "${var.project_name}-${var.environment}-lambda-sg"
   vpc_id      = module.vpc.vpc_id
@@ -88,23 +98,25 @@ module "rds" {
   depends_on = [module.vpc]
 }
 
-module "carbone" {
-  source = "../../modules/carbone"
+# module "carbone" {
+#   source = "../../modules/carbone"
 
-  project_name           = var.project_name
-  environment            = var.environment
+#   project_name           = var.project_name
+#   environment            = var.environment
 
-  db_host                = var.db_host
-  db_name                = module.rds.db_name
-  db_user                = module.rds.db_username
-  db_password            = module.rds.db_password
+#   db_host                = var.db_host
+#   db_name                = module.rds.db_name
+#   db_user                = module.rds.db_username
+#   db_password            = module.rds.db_password
 
-  processed_bucket_name  = module.s3.bucket_id
-  processed_bucket_arn   = module.s3.bucket_arn
+#   processed_bucket_name  = module.s3.bucket_id
+#   processed_bucket_arn   = module.s3.bucket_arn
 
-  carbone_api_token      = var.carbone_api_token
-  carbone_template_id    = var.carbone_template_id
-}
+#   carbone_api_token      = var.carbone_api_token
+#   carbone_template_id    = var.carbone_template_id
+# }
+
+
 
 module "s3" {
   source = "../../modules/s3"

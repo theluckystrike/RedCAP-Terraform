@@ -54,6 +54,9 @@ s3_enable_logging            = false       # No access logs in dev (save costs)
 s3_create_cloudwatch_alarms  = false       # No alarms in dev
 s3_lambda_function_arn       = "arn:aws:lambda:ap-southeast-2:123456789012:function:process_excel_dev"
 
+#ec2 
+key_name         = "my-ec2-key"
+private_key_path = "~/.ssh/my-ec2-key.pem"
 
 # Tags
 tags = {

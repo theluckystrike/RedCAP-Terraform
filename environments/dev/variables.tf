@@ -393,3 +393,13 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "key_name" {
+  description = "Name of the EC2 key pair used to SSH into the instance"
+  type        = string
+}
+
+variable "private_key_path" {
+  description = "Path to the private key (.pem) used by Ansible for SSH"
+  type        = string
+}
