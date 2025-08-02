@@ -194,6 +194,27 @@ output "infrastructure_summary" {
   }
 }
 
+
+output "db_instance_endpoint_clean" {
+  description = "RDS endpoint without port"
+  value       = regex("^([^:]+)", module.rds.db_instance_endpoint)[0]
+  sensitive   = true
+}
+
+output "db_name" {
+  value     = module.rds.db_name
+}
+
+output "db_username" {
+  value     = module.rds.db_username
+  sensitive = true
+}
+
+output "db_password" {
+  value     = module.rds.db_password
+  sensitive = true
+}
+
 output "database_connection" {
   description = "Database connection information"
   value = {

@@ -1,0 +1,61 @@
+- name: Upload and create REDCap schema tables in RDS
+  hosts: redcap
+  become: true
+
+  vars:
+    db_host: "{{ lookup('env', 'TF_DB_HOST') }}"
+    db_name: "{{ lookup('env', 'TF_DB_NAME') }}"
+    db_user: "{{ lookup('env', 'TF_DB_USER') }}"
+    db_password: "{{ lookup('env', 'TF_DB_PASS') }}"
+    sql_files:
+      - part_1.sql
+      - part_2.sql
+      - part_3.sql
+
+  tasks:
+    - name: Install PostgreSQL client
+      apt:
+        name: postgresql-client
+        update_cache: yes
+
+    - name: Upload SQL files to EC2 instance
+      copy:
+        src: "files/{{ item }}"
+        dest: "/tmp/{{ item }}"
+        mode: '0644'
+      loop: "{{ sql_files }}"
+
+    - name: Confirm that SQL file exists before execution
+      shell: ls -lh /tmp/{{ item }}
+      loop: "{{ sql_files }}"
+      register: file_check
+      changed_when: false
+
+    - name: Apply each SQL schema file to PostgreSQL RDS
+      shell: >
+        timeout 120s psql -h {{ db_host }} -p 5432 -U {{ db_user }} -d {{ db_name }} -v ON_ERROR_STOP=1 -f /tmp/{{ item }}
+      loop: "{{ sql_files }}"
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+      args:
+        executable: /bin/bash
+      register: psql_output
+      failed_when: psql_output.rc != 0
+
+    - name: Show execution result of each SQL file
+      debug:
+        msg: "{{ item.stdout_lines | default([]) }}"
+      loop: "{{ psql_output.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc == 0  # Only show successful output
+
+    - name: Verify tables created in PostgreSQL
+      shell: >
+        bash -c "PGPASSWORD='{{ db_password }}' psql -h {{ db_host }} -U {{ db_user }} -d {{ db_name }} -c '\\dt'"
+      register: result
+      changed_when: false
+
+    - name: Output list of created tables
+      debug:
+        var: result.stdout_lines
