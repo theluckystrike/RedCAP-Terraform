@@ -1,0 +1,150 @@
+---
+- name: Setup REDCap export cron job on EC2 (IAM role + S3 safeguard + Email alert)
+  hosts: ec2
+  become: yes
+
+  vars:
+    script_path: /opt/redcap_export/redcap_to_s3.py
+    redcap_api_url: "https://redcap.example.com/api/"
+    redcap_api_token: "YOUR_REDCAP_API_TOKEN"
+    s3_bucket: "my-redcap-exports"
+
+    # Email alert config
+    smtp_server: "email-smtp.us-east-1.amazonaws.com"  # Example: AWS SES SMTP endpoint
+    smtp_port: 587
+    smtp_user: "SMTP_USERNAME"
+    smtp_password: "SMTP_PASSWORD"
+    email_sender: "alerts@example.com"
+    email_recipient: "admin@example.com"
+
+  tasks:
+    - name: Ensure required packages are installed
+      apt:
+        name:
+          - python3
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Install required Python libraries
+      pip:
+        name:
+          - boto3
+          - pandas
+          - requests
+          - pycap
+        executable: pip3
+
+    - name: Verify EC2 IAM role has S3 write access and cleanup test file
+      shell: |
+        python3 - <<'EOF'
+        import boto3, sys, uuid
+        s3 = boto3.client("s3")
+        bucket = "{{ s3_bucket }}"
+        test_key = f"iam-role-test-{uuid.uuid4()}.txt"
+        try:
+            s3.put_object(Bucket=bucket, Key=test_key, Body=b"test")
+            print(f"✅ S3 write access verified. Uploaded test file {test_key}")
+            s3.delete_object(Bucket=bucket, Key=test_key)
+            print(f"🗑️ Test file {test_key} deleted successfully.")
+        except Exception as e:
+            print(f"❌ S3 access failed: {e}")
+            sys.exit(1)
+        EOF
+      register: s3_check
+      changed_when: false
+
+    - name: Show S3 check result
+      debug:
+        var: s3_check.stdout
+
+    - name: Create directory for script
+      file:
+        path: /opt/redcap_export
+        state: directory
+        mode: '0755'
+
+    - name: Deploy REDCap export script with email alerts
+      copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+          import os
+          import datetime
+          import pandas as pd
+          import boto3
+          from redcap import Project
+          import traceback
+          import sys
+          import smtplib
+          from email.mime.text import MIMEText
+
+          REDCAP_API_URL = "{{ redcap_api_url }}"
+          REDCAP_API_TOKEN = "{{ redcap_api_token }}"
+          S3_BUCKET = "{{ s3_bucket }}"
+
+          SMTP_SERVER = "{{ smtp_server }}"
+          SMTP_PORT = {{ smtp_port }}
+          SMTP_USER = "{{ smtp_user }}"
+          SMTP_PASSWORD = "{{ smtp_password }}"
+          EMAIL_SENDER = "{{ email_sender }}"
+          EMAIL_RECIPIENT = "{{ email_recipient }}"
+
+          def send_email_alert(subject, body):
+              try:
+                  msg = MIMEText(body)
+                  msg["Subject"] = subject
+                  msg["From"] = EMAIL_SENDER
+                  msg["To"] = EMAIL_RECIPIENT
+
+                  with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                      server.starttls()
+                      server.login(SMTP_USER, SMTP_PASSWORD)
+                      server.sendmail(EMAIL_SENDER, [EMAIL_RECIPIENT], msg.as_string())
+
+              except Exception as e:
+                  print(f"⚠️ Failed to send email alert: {e}")
+
+          try:
+              # Fetch data from REDCap
+              project = Project(REDCAP_API_URL, REDCAP_API_TOKEN)
+              records = project.export_records(format_type='df')
+
+              # Save to Excel
+              timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+              filename = f"/tmp/redcap_export_{timestamp}.xlsx"
+              records.to_excel(filename, index=False)
+
+              # Upload to S3
+              s3 = boto3.client("s3")
+              s3.upload_file(filename, S3_BUCKET, f"exports/redcap_export_{timestamp}.xlsx")
+
+              print(f"✅ Exported and uploaded {filename} to s3://{S3_BUCKET}/exports/")
+
+              # Remove local temp file
+              os.remove(filename)
+
+          except Exception as e:
+              error_log = f"/var/log/redcap_export_error.log"
+              with open(error_log, "a") as log:
+                  log.write(f"[{datetime.datetime.now()}] ERROR: {e}\n")
+                  log.write(traceback.format_exc() + "\n")
+
+              alert_subject = "🚨 REDCap Export Failed"
+              alert_body = (
+                  f"REDCap Export Failed\n"
+                  f"Time: {datetime.datetime.now()}\n"
+                  f"Error: {e}\n\n"
+                  f"See server log: {error_log}"
+              )
+              send_email_alert(alert_subject, alert_body)
+
+              sys.exit(1)
+
+    - name: Create cron job for REDCap export
+      cron:
+        name: "REDCap to S3 export job"
+        minute: "0"
+        hour: "0"
+        job: "python3 {{ script_path }} >> /var/log/redcap_export.log 2>&1"

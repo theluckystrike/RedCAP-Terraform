@@ -5,7 +5,7 @@
 .terraform.lock.hcl
 *.tfplan
 *.tfvars.backup
-
+environments/dev/package/
 # IDE files
 .vscode/
 .idea/
