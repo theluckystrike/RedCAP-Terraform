@@ -42,13 +42,17 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa.pem
           chmod 600 ~/.ssh/id_rsa.pem
       
-      - name: Setting Up Enviournment Variables
-        id: set-env 
+      - name: Set Terraform outputs as env
         run: |
-              echo "TF_DB_HOST=$(terraform output -raw db_instance_endpoint_clean)" >> $GITHUB_ENV
-              echo "TF_DB_NAME=$(terraform output -raw db_name)" >> $GITHUB_ENV
-              echo "TF_DB_USER=$(terraform output -raw db_username)" >> $GITHUB_ENV
-              echo "TF_DB_PASS=$(terraform output -raw db_password)" >> $GITHUB_ENV
+          TF_DB_HOST=$(terraform output -json db_instance_endpoint_clean | jq -r .value)
+          TF_DB_NAME=$(terraform output -json db_name | jq -r .value)
+          TF_DB_USER=$(terraform output -json db_username | jq -r .value)
+          TF_DB_PASS=$(terraform output -json db_password | jq -r .value)
+
+          echo "TF_DB_HOST=$TF_DB_HOST" >> $GITHUB_ENV
+          echo "TF_DB_NAME=$TF_DB_NAME" >> $GITHUB_ENV
+          echo "TF_DB_USER=$TF_DB_USER" >> $GITHUB_ENV
+          echo "TF_DB_PASS=$TF_DB_PASS" >> $GITHUB_ENV
 
       - name: Install Ansible
         run: sudo apt-get update && sudo apt-get install -y ansible
