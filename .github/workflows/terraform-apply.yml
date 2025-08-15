@@ -2,9 +2,7 @@ name: REDCAP CD
 
 on:
   workflow_dispatch:  # 👈 manual trigger only
-  workflows: ["REDCAP CI"]
-    types:
-      - completed
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
