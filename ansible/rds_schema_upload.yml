@@ -1,4 +1,4 @@
-- name: Upload and create REDCap schema tables in RDS
+- name: Upload and create REDCAP schema tables in RDS
   hosts: redcap
   become: true
 

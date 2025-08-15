@@ -11,6 +11,9 @@ on:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
     steps:
       - name: Checkout Code
@@ -23,15 +26,18 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
-        working-diretory: ./environments/dev
+        working-directory: ./environments/dev
 
       - name: Terraform Validate
         run: terraform validate
-        working-diretory: ./environments/dev
+        working-directory: ./environments/dev
 
       - name: Terraform Plan
-        run: terraform plan
-        working-diretory: ./environments/dev
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: terraform plan -out=tfplan
+        working-directory: ./environments/dev
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v3
+        with:
+            name: tfplan
+            path: ./environments/dev/tfplan

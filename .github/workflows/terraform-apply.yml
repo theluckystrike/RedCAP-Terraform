@@ -6,6 +6,9 @@ on:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
     steps:
       - name: Checkout Code
@@ -18,11 +21,47 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
-        working-diretory: ./environments/dev
+        working-directory: ./environments/dev
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: tfplan
+          path: ./environments/dev
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve
-        working-diretory: ./environments/dev
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: terraform apply -auto-approve tfplan
+        working-directory: ./environments/dev
+
+
+      - name: Cleanup Plan File
+        run: rm -f ./environments/dev/tfplan
+        if: always() 
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa.pem
+          chmod 600 ~/.ssh/id_rsa.pem
+      
+      - name: Setting Up Enviournment Variables
+        id: set-env 
+        run: |
+              echo "TF_DB_HOST=$(terraform output -raw db_instance_endpoint_clean)" >> $GITHUB_ENV
+              echo "TF_DB_NAME=$(terraform output -raw db_name)" >> $GITHUB_ENV
+              echo "TF_DB_USER=$(terraform output -raw db_username)" >> $GITHUB_ENV
+              echo "TF_DB_PASS=$(terraform output -raw db_password)" >> $GITHUB_ENV
+
+      - name: Install Ansible
+        run: sudo apt-get update && sudo apt-get install -y ansible
+
+      # - name: Run Ansible Playbook For Redcap Install
+      #   run: ansible-playbook -i ./ansible/inventory.ini ./ansible/redcap_install.yml
+
+      - name: Run Ansible Playbook For RDS Schema Upload
+        run: ansible-playbook -i ./ansible/inventory.ini ./ansible/rds_schema_upload.yml
+
+      - name: Run Ansible Playbook For Redcap Export
+        run: ansible-playbook -i ./ansible/inventory.ini ./ansible/redcap_export.yml
+
+      

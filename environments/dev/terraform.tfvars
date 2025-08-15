@@ -56,7 +56,7 @@ s3_lambda_function_arn       = "arn:aws:lambda:ap-southeast-2:123456789012:funct
 
 #ec2 
 key_name         = "my-ec2-key"
-private_key_path = "~/.ssh/my-ec2-key.pem"
+private_key_path = "~/.ssh/id_rsa"
 
 # Tags
 tags = {

@@ -1,5 +1,5 @@
 ---
-- name: Setup REDCap export cron job on EC2 (IAM role + S3 safeguard + Email alert)
+- name: Setup REDCAP export cron job on EC2 (IAM role + S3 safeguard + Email alert)
   hosts: ec2
   become: yes
 

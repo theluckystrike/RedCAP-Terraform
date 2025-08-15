@@ -11,7 +11,7 @@ resource "aws_instance" "redcap" {
   }
 
   provisioner "local-exec" {
-    command = "mkdir -p ${path.root}/ansible && echo '[redcap]\n${self.public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=${var.private_key_path}' > ${path.root}/ansible/inventory.ini"
+    command = "echo '[redcap]\n${self.public_ip} ansible_user=ubuntu ansible_ssh_private_key_file=${var.private_key_path}' > ${path.root}/../../ansible/inventory.ini"
   }
 }
 

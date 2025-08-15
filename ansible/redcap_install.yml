@@ -1,4 +1,4 @@
-- name: Install REDCap
+- name: Install REDCAP
   hosts: redcap
   become: true
 
