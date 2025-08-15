@@ -192,6 +192,7 @@ output "infrastructure_summary" {
       versioning       = module.s3.versioning_enabled
     }
   }
+  sensitive = true
 }
 
 
@@ -242,4 +243,5 @@ output "s3_bucket_info" {
     processed_folder = module.s3.processed_folder_uri
     failed_folder    = module.s3.failed_folder_uri
   }
+  sensitive = true
 }
