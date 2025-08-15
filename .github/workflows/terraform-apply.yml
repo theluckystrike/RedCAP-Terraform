@@ -18,9 +18,11 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
+        working-diretory: ./environments/dev
 
       - name: Terraform Apply
         run: terraform apply -auto-approve
+        working-diretory: ./environments/dev
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
