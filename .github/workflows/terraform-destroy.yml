@@ -20,7 +20,10 @@ jobs:
           terraform_version: 1.6.2
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -backend-config="bucket=my-terraform-states" \
+                            -backend-config="key=redcap/dev/terraform.tfstate" \
+                            -backend-config="region=eu-west-1" \
+                            -backend-config="dynamodb_table=terraform-lock"
         working-directory: ./environments/dev
 
       - name: Terraform Destroy
