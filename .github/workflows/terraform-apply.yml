@@ -2,7 +2,9 @@ name: REDCAP CD
 
 on:
   workflow_dispatch:  # 👈 manual trigger only
-
+  workflows: ["REDCAP CI"]
+    types:
+      - completed
 jobs:
   terraform:
     runs-on: ubuntu-latest
@@ -23,11 +25,9 @@ jobs:
         run: terraform init
         working-directory: ./environments/dev
 
-      - name: Download Plan Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan
-          path: ./environments/dev
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        working-directory: ./environments/dev
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
