@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>REDCap-style Data Server</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>REDCap-style Data Server</h1>
+            <p>Collect, manage, and export data to Excel</p>
+        </div>
+
+        <div class="nav">
+            <button onclick="showSection('data-entry')" id="data-entry-btn" class="active">Data Entry</button>
+        </div>
+
+        <div id="alert-container"></div>
+
+        <!-- Data Entry Section -->
+        <div id="data-entry" class="section active">
+            <h2>Data Entry Form</h2>
+            <form id="dataForm">
+                <!-- Dynamic form fields will be injected here -->
+                <div id="form-fields"></div>
+
+                <button type="submit" class="btn btn-success">Save Record</button>
+                <button type="button" class="btn" onclick="clearForm()">Clear Form</button>
+            </form>
+        </div>
+    <!-- JS file will build the form dynamically -->
+    <script src="app.js"></script>
+</body>
+</html>

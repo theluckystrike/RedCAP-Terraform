@@ -4,13 +4,13 @@ const ExcelJS = require('exceljs');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const csv = require("csv-parser");
+const zlib = require('zlib');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
 // Configure multer for file uploads
@@ -76,359 +76,17 @@ db.serialize(() => {
   stmt.finalize();
 });
 
-// Routes
-
-// Serve main page
-app.get('/', (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>REDCap-style Data Server</title>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
-            .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            .header { background: #007bff; color: white; padding: 15px; margin: -20px -20px 20px -20px; border-radius: 8px 8px 0 0; }
-            .nav { margin: 20px 0; }
-            .nav button { margin-right: 10px; padding: 10px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-            .nav button:hover { background: #0056b3; }
-            .nav button.active { background: #28a745; }
-            .section { display: none; }
-            .section.active { display: block; }
-            .form-group { margin: 15px 0; }
-            .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-            .form-group input, .form-group select, .form-group textarea { 
-                width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; 
-            }
-            .form-group input[type="radio"] { width: auto; margin-right: 8px; }
-            .radio-group { display: flex; gap: 15px; flex-wrap: wrap; }
-            .radio-group label { display: flex; align-items: center; font-weight: normal; margin-bottom: 0; }
-            .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
-            .btn:hover { background: #0056b3; }
-            .btn-success { background: #28a745; }
-            .btn-success:hover { background: #218838; }
-            .btn-danger { background: #dc3545; }
-            .btn-danger:hover { background: #c82333; }
-            .table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            .table th, .table td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-            .table th { background-color: #f8f9fa; font-weight: bold; }
-            .table tr:hover { background-color: #f5f5f5; }
-            .alert { padding: 15px; margin: 20px 0; border: 1px solid transparent; border-radius: 4px; }
-            .alert-success { color: #155724; background-color: #d4edda; border-color: #c3e6cb; }
-            .alert-error { color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; }
-            .records-container { max-height: 400px; overflow-y: auto; }
-            .export-section { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>REDCap-style Data Server</h1>
-                <p>Collect, manage, and export data to Excel</p>
-            </div>
-
-            <div class="nav">
-                <button onclick="showSection('data-entry')" id="data-entry-btn" class="active">Data Entry</button>
-                <button onclick="showSection('view-data')" id="view-data-btn">View Data</button>
-                <button onclick="showSection('export-data')" id="export-data-btn">Export Data</button>
-            </div>
-
-            <div id="alert-container"></div>
-
-            <div id="data-entry" class="section active">
-                <h2>Data Entry Form</h2>
-                <form id="dataForm">
-                    <div id="form-fields"></div>
-                    <button type="submit" class="btn btn-success">Save Record</button>
-                    <button type="button" class="btn" onclick="clearForm()">Clear Form</button>
-                </form>
-            </div>
-
-            <div id="view-data" class="section">
-                <h2>View Records</h2>
-                <button onclick="loadRecords()" class="btn">Refresh Data</button>
-                <div class="records-container">
-                    <table id="records-table" class="table">
-                        <thead>
-                            <tr id="records-header"></tr>
-                        </thead>
-                        <tbody id="records-body"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div id="export-data" class="section">
-                <h2>Export Data</h2>
-                <div class="export-section">
-                    <h3>Export Options</h3>
-                    <p>Export all records to Excel format (.xlsx)</p>
-                    <button onclick="exportToExcel()" class="btn btn-success">Download Excel File</button>
-                    <button onclick="exportToCSV()" class="btn">Download CSV File</button>
-                </div>
-                
-                <div class="export-section">
-                    <h3>Import Data</h3>
-                    <p>Upload Excel or CSV file to import records</p>
-                    <input type="file" id="import-file" accept=".xlsx,.csv" />
-                    <button onclick="importData()" class="btn">Import File</button>
-                </div>
-            </div>
-        </div>
-
-        <script>
-            let currentFields = [];
-            let currentRecords = [];
-
-            // Initialize
-            document.addEventListener('DOMContentLoaded', function() {
-                loadFields();
-            });
-
-            function showSection(sectionId) {
-                document.querySelectorAll('.section').forEach(section => {
-                    section.classList.remove('active');
-                });
-                document.querySelectorAll('.nav button').forEach(btn => {
-                    btn.classList.remove('active');
-                });
-                
-                document.getElementById(sectionId).classList.add('active');
-                document.getElementById(sectionId + '-btn').classList.add('active');
-
-                if (sectionId === 'view-data') {
-                    loadRecords();
-                }
-            }
-
-            function showAlert(message, type = 'success') {
-                const alertContainer = document.getElementById('alert-container');
-                alertContainer.innerHTML = \`<div class="alert alert-\${type}">\${message}</div>\`;
-                setTimeout(() => {
-                    alertContainer.innerHTML = '';
-                }, 5000);
-            }
-
-            async function loadFields() {
-                try {
-                    const response = await fetch('/api/fields/1');
-                    const fields = await response.json();
-                    currentFields = fields;
-                    renderForm(fields);
-                } catch (error) {
-                    console.error('Error loading fields:', error);
-                    showAlert('Error loading form fields', 'error');
-                }
-            }
-
-            function renderForm(fields) {
-                const container = document.getElementById('form-fields');
-                container.innerHTML = '';
-
-                fields.forEach(field => {
-                    const div = document.createElement('div');
-                    div.className = 'form-group';
-                    
-                    let inputHTML = '';
-                    const required = field.required ? 'required' : '';
-                    
-                    switch(field.field_type) {
-                        case 'text':
-                            inputHTML = \`<input type="text" id="\${field.field_name}" name="\${field.field_name}" \${required} />\`;
-                            break;
-                        case 'number':
-                            inputHTML = \`<input type="number" id="\${field.field_name}" name="\${field.field_name}" \${required} />\`;
-                            break;
-                        case 'date':
-                            inputHTML = \`<input type="date" id="\${field.field_name}" name="\${field.field_name}" \${required} />\`;
-                            break;
-                        case 'radio':
-                            const options = field.options ? field.options.split(',') : [];
-                            inputHTML = '<div class="radio-group">';
-                            options.forEach(option => {
-                                inputHTML += \`
-                                    <label>
-                                        <input type="radio" name="\${field.field_name}" value="\${option.trim()}" \${required} />
-                                        \${option.trim()}
-                                    </label>
-                                \`;
-                            });
-                            inputHTML += '</div>';
-                            break;
-                        case 'textarea':
-                            inputHTML = \`<textarea id="\${field.field_name}" name="\${field.field_name}" rows="4" \${required}></textarea>\`;
-                            break;
-                    }
-                    
-                    div.innerHTML = \`
-                        <label for="\${field.field_name}">\${field.field_label}\${field.required ? ' *' : ''}</label>
-                        \${inputHTML}
-                    \`;
-                    
-                    container.appendChild(div);
-                });
-            }
-
-            document.getElementById('dataForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                
-                const formData = new FormData(e.target);
-                const data = {};
-                
-                for (let [key, value] of formData.entries()) {
-                    data[key] = value;
-                }
-                
-                try {
-                    const response = await fetch('/api/records', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ projectId: 1, data: data })
-                    });
-                    
-                    if (response.ok) {
-                        showAlert('Record saved successfully!');
-                        clearForm();
-                    } else {
-                        throw new Error('Failed to save record');
-                    }
-                } catch (error) {
-                    console.error('Error saving record:', error);
-                    showAlert('Error saving record', 'error');
-                }
-            });
-
-            function clearForm() {
-                document.getElementById('dataForm').reset();
-            }
-
-            async function loadRecords() {
-                try {
-                    const response = await fetch('/api/records/1');
-                    const records = await response.json();
-                    currentRecords = records;
-                    renderRecordsTable(records);
-                } catch (error) {
-                    console.error('Error loading records:', error);
-                    showAlert('Error loading records', 'error');
-                }
-            }
-
-            function renderRecordsTable(records) {
-                const header = document.getElementById('records-header');
-                const body = document.getElementById('records-body');
-                
-                if (records.length === 0) {
-                    header.innerHTML = '<th>No records found</th>';
-                    body.innerHTML = '';
-                    return;
-                }
-
-                // Get all unique field names
-                const fieldNames = [...new Set(records.map(r => r.field_name))];
-                
-                // Create header
-                header.innerHTML = '<th>Record ID</th>' + fieldNames.map(name => 
-                    \`<th>\${currentFields.find(f => f.field_name === name)?.field_label || name}</th>\`
-                ).join('');
-
-                // Group records by record_id
-                const groupedRecords = {};
-                records.forEach(record => {
-                    if (!groupedRecords[record.record_id]) {
-                        groupedRecords[record.record_id] = {};
-                    }
-                    groupedRecords[record.record_id][record.field_name] = record.field_value;
-                });
-
-                // Create rows
-                body.innerHTML = Object.keys(groupedRecords).map(recordId => {
-                    const record = groupedRecords[recordId];
-                    return '<tr><td>' + recordId + '</td>' + 
-                           fieldNames.map(fieldName => \`<td>\${record[fieldName] || ''}</td>\`).join('') + 
-                           '</tr>';
-                }).join('');
-            }
-
-            async function exportToExcel() {
-                try {
-                    const response = await fetch('/api/export/excel/1');
-                    if (response.ok) {
-                        const blob = await response.blob();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'patient_data.xlsx';
-                        a.click();
-                        window.URL.revokeObjectURL(url);
-                        showAlert('Excel file downloaded successfully!');
-                    } else {
-                        throw new Error('Export failed');
-                    }
-                } catch (error) {
-                    console.error('Error exporting to Excel:', error);
-                    showAlert('Error exporting to Excel', 'error');
-                }
-            }
-
-            async function exportToCSV() {
-                try {
-                    const response = await fetch('/api/export/csv/1');
-                    if (response.ok) {
-                        const blob = await response.blob();
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'patient_data.csv';
-                        a.click();
-                        window.URL.revokeObjectURL(url);
-                        showAlert('CSV file downloaded successfully!');
-                    } else {
-                        throw new Error('Export failed');
-                    }
-                } catch (error) {
-                    console.error('Error exporting to CSV:', error);
-                    showAlert('Error exporting to CSV', 'error');
-                }
-            }
-
-            async function importData() {
-                const fileInput = document.getElementById('import-file');
-                const file = fileInput.files[0];
-                
-                if (!file) {
-                    showAlert('Please select a file to import', 'error');
-                    return;
-                }
-
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('projectId', '1');
-
-                try {
-                    const response = await fetch('/api/import', {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (response.ok) {
-                        const result = await response.json();
-                        showAlert(\`Import successful! \${result.imported} records imported.\`);
-                        loadRecords();
-                        fileInput.value = '';
-                    } else {
-                        throw new Error('Import failed');
-                    }
-                } catch (error) {
-                    console.error('Error importing data:', error);
-                    showAlert('Error importing data', 'error');
-                }
-            }
-        </script>
-    </body>
-    </html>
-  `);
+// Debug route to check fields
+app.get('/api/debug/fields/:projectId', (req, res) => {
+  const projectId = req.params.projectId;
+  db.all('SELECT * FROM fields WHERE project_id = ? ORDER BY id', [projectId], (err, rows) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    console.log('Fields in database:', rows);
+    res.json({ count: rows.length, fields: rows });
+  });
 });
 
 // API Routes
@@ -456,6 +114,77 @@ app.get('/api/records/:projectId', (req, res) => {
     res.json(rows);
   });
 });
+
+app.use((req, res, next) => {
+  if (req.headers['content-encoding'] === 'gzip') {
+    const gunzip = zlib.createGunzip();
+    let buffer = [];
+
+    req.pipe(gunzip);
+
+    gunzip.on('data', (chunk) => {
+      buffer.push(chunk);
+    });
+
+    gunzip.on('end', () => {
+      try {
+        const decompressed = Buffer.concat(buffer).toString();
+        req.body={data: JSON.parse(decompressed)}; // attach to req.body like express.json()
+        next();
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    gunzip.on('error', (err) => {
+      next(err);
+    });
+  } else {
+    next(); // if not gzip, pass along
+  }
+});
+
+app.post('/api/download-excel', async (req, res) => {
+  try {
+    const { projectId, data } = req.body;
+
+    if (!data || Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'No data provided' });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet(`Project_${projectId}`);
+
+    // Add header row
+    const headers = Object.keys(data.data || {});
+    worksheet.addRow(headers);
+
+    // Add rows
+    Object.values(data).forEach(record => {
+      worksheet.addRow(Object.values(record));
+    });
+
+    // Generate buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    // Set headers for download
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=project_${projectId}.xlsx`
+    );
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+
+    // Send file
+    res.send(buffer);
+  } catch (err) {
+    console.error('Excel export error:', err);
+    res.status(500).json({ error: 'Failed to export Excel' });
+  }
+});
+
 
 // Save a new record
 app.post('/api/records', (req, res) => {
@@ -689,6 +418,69 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     console.error('Import error:', error);
     res.status(500).json({ error: 'Import failed' });
   }
+});
+
+app.get("/api/fields", (req, res) => {
+  const results = [];
+  const filePath = path.join(__dirname,"Testing_DataDictionary_2025-08-27.csv");
+  fs.createReadStream(filePath)
+    .pipe(csv())
+    .on("data", (row) => {
+      const field = {
+        name: row["Variable / Field Name"],
+        label: row["Field Label"],
+        type: "text",
+        note: row["Field Note"] || null
+      };
+
+      if(row["Field Label"]!= null){
+
+        // Field type mapping
+        switch (row["Field Type"]) {
+          case "notes":
+            field.type = "textarea";
+            break;
+          case "radio":
+            field.type = "radio";
+            field.choices = row["Choices, Calculations, OR Slider Labels"]
+              ? row["Choices, Calculations, OR Slider Labels"].split("|")
+              : [];
+            break;
+          case "dropdown":
+            field.type = "select";
+            field.choices = row["Choices, Calculations, OR Slider Labels"]
+              ? row["Choices, Calculations, OR Slider Labels"].split("|")
+              : [];
+            break;
+          case "yesno":
+            field.type = "select";
+            field.choices = ["0, No", "1, Yes"];
+            break;
+          case "truefalse":
+            field.type = "select";
+            field.choices = ["0, False", "1, True"];
+            break;
+          case "calc":
+            field.type = "calculated";
+            break;
+          case "slider":
+            field.type = "range";
+            break;
+          case "text":
+            const validation = row["Text Validation Type OR Show Slider Number"];
+            if (validation === "date_dmy") field.type = "date";
+            else if (validation === "email") field.type = "email";
+            else if (validation === "integer" || validation === "float") field.type = "number";
+            else field.type = "text";
+            break;
+        }
+
+        results.push(field);
+      }
+    })
+    .on("end", () => {
+      res.json(results);
+    });
 });
 
 // Start server
