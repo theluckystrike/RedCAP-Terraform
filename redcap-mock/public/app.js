@@ -351,7 +351,7 @@ async function buildForm() {
         } else if (field.validation === "zip") {
           dummyValue = "12345";
         } else {
-          dummyValue = field.default || `dummy_${field.name}`;
+          dummyValue = field.default || `${field.name}`;
         }
         break;
 

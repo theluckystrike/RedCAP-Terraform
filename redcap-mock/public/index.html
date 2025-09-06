@@ -4,34 +4,91 @@
     <title>REDCap-style Data Server</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <div class="bg-gradient"></div>
     <div class="container">
+        <!-- Header -->
         <div class="header">
-            <h1>REDCap-style Data Server</h1>
-            <p>Collect, manage, and export data to Excel</p>
+            <div class="header-content">
+                <div class="header-text">
+                    <h1>REDCap-style Data Server</h1>
+                    <p>Collect, manage, and export data to Excel</p>
+                </div>
+            </div>
         </div>
 
+        <!-- Navigation -->
         <div class="nav">
-            <button onclick="showSection('data-entry')" id="data-entry-btn" class="active">Data Entry</button>
+            <button onclick="showSection('data-entry')" id="data-entry-btn" class="nav-btn active">📑 Data Entry</button>
+            <button onclick="showSection('view-data')" id="view-data-btn" class="nav-btn">📊 View Data</button>
+            <button onclick="showSection('export-data')" id="export-data-btn" class="nav-btn">📤 Export Data</button>
         </div>
 
+        <!-- Alerts -->
         <div id="alert-container"></div>
 
-        <!-- Data Entry Section -->
+        <!-- Data Entry -->
         <div id="data-entry" class="section active">
-            <h2>Data Entry Form</h2>
-            <form id="dataForm">
-                <!-- Dynamic form fields will be injected here -->
-                <div id="form-fields"></div>
-
-                <button type="submit" class="btn btn-success">Save Record</button>
-                <button type="button" class="btn" onclick="clearForm()">Clear Form</button>
-            </form>
+            <div class="form-container">
+                <div class="section-header">
+                    <h2>📑 Data Entry Form</h2>
+                </div>
+                <form id="dataForm">
+                    <div id="form-fields" class="form-grid"></div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">💾 Save Record</button>
+                        <button type="button" class="btn btn-secondary" onclick="clearForm()">🧹 Clear Form</button>
+                    </div>
+                </form>
+            </div>
         </div>
-    <!-- JS file will build the form dynamically -->
+
+        <!-- View Data -->
+        <div id="view-data" class="section">
+            <div class="form-container">
+                <div class="section-header">
+                    <h2>📊 View Records</h2>
+                </div>
+                <button onclick="loadRecords()" class="btn btn-secondary">🔄 Refresh Data</button>
+                <div class="records-container">
+                    <table id="records-table" class="table">
+                        <thead>
+                            <tr id="records-header"></tr>
+                        </thead>
+                        <tbody id="records-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Export Data -->
+        <div id="export-data" class="section">
+            <div class="form-container">
+                <div class="section-header">
+                    <h2>📤 Export Data</h2>
+                </div>
+                <div class="export-section">
+                    <h3>Export Options</h3>
+                    <p>Export all records to Excel or CSV</p>
+                    <div class="form-actions">
+                        <button onclick="exportToExcel()" class="btn btn-primary">⬇️ Excel</button>
+                        <button onclick="exportToCSV()" class="btn btn-secondary">⬇️ CSV</button>
+                    </div>
+                </div>
+
+                <div class="export-section" style="margin-top:2rem;">
+                    <h3>Import Data</h3>
+                    <p>Upload Excel or CSV file</p>
+                    <input type="file" id="import-file" accept=".xlsx,.csv" />
+                    <button onclick="importData()" class="btn btn-secondary" style="margin-top:1rem;">📥 Import File</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>
