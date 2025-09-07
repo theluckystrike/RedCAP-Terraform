@@ -20,6 +20,34 @@ function showSection(sectionId) {
     }
 }
 
+async function exportToExcel(){
+    try{
+        const response = await fetch('/api/getRecords');
+        const data = await response.json();
+        const res = await fetch('/api/download-excel',{
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json',"content-encoding":"gzip" },
+            body: pako.gzip(JSON.stringify({projectId:1,data: data.records }))
+        });
+        if (res.ok) {
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'patient_data.xlsx';
+            a.click();
+            window.URL.revokeObjectURL(url);
+            showAlert('Data Downloaded Successfully');
+        }
+        else {
+            throw new Error('Failed to download records');
+        }
+    } catch (error) {
+        console.error('Error downloading record:', error);
+        showAlert('Error downloading record', 'error');
+    }
+}
+
 function showAlert(message, type = 'success') {
     const alertContainer = document.getElementById('alert-container');
     alertContainer.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
@@ -37,25 +65,20 @@ async function loadFields() {
     isLoadingFields = true;
     
     try {
-        const response = await fetch('/api/fields/1');
+        const response = await fetch('/api/fields');
         const fields = await response.json();
         console.log('Loaded fields:', fields); // Debug log
         
         // Check for duplicates
         const uniqueFields = [];
-        const seenFieldNames = new Set();
         
         fields.forEach(field => {
-            if (!seenFieldNames.has(field.field_name)) {
-                seenFieldNames.add(field.field_name);
-                uniqueFields.push(field);
-            }
+            uniqueFields.push(field);
         });
         
         console.log('Unique fields after deduplication:', uniqueFields); // Debug log
         
         currentFields = uniqueFields;
-        renderForm(uniqueFields);
         isFormLoaded = true;
     } catch (error) {
         console.error('Error loading fields:', error);
@@ -65,76 +88,23 @@ async function loadFields() {
     }
 }
 
-function renderForm(fields) {
-    const container = document.getElementById('form-fields');
-    
-    // Double-check that container exists and clear it completely
-    if (!container) {
-        console.error('Form fields container not found!');
-        return;
-    }
-    
-    // Clear any existing content
-    container.innerHTML = '';
-    
-    console.log('Rendering form with fields:', fields); // Debug log
-    console.log('Container cleared, starting fresh render...'); // Debug log
+function scrollToTop(duration = 800) {
+    const start = window.scrollY;
+    const startTime = performance.now();
 
-    if (!fields || fields.length === 0) {
-        console.log('No fields to render');
-        return;
-    }
+    function scrollStep(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1); // 0 → 1
+        const ease = 1 - Math.pow(1 - progress, 3); // easing (cubic)
 
-    fields.forEach((field, index) => {
-        console.log(`Rendering field ${index + 1}:`, field.field_name, field.field_label); // Debug log
-        
-        const div = document.createElement('div');
-        div.className = 'form-group';
-        div.setAttribute('data-field', field.field_name); // Add identifier
-        
-        let inputHTML = '';
-        const required = field.required ? 'required' : '';
-        
-        switch(field.field_type) {
-            case 'text':
-                inputHTML = `<input type="text" id="${field.field_name}" name="${field.field_name}" ${required} />`;
-                break;
-            case 'number':
-                inputHTML = `<input type="number" id="${field.field_name}" name="${field.field_name}" ${required} />`;
-                break;
-            case 'date':
-                inputHTML = `<input type="date" id="${field.field_name}" name="${field.field_name}" ${required} />`;
-                break;
-            case 'radio':
-                const options = field.options ? field.options.split(',') : [];
-                inputHTML = '<div class="radio-group">';
-                options.forEach((option, index) => {
-                    // Only add required attribute to the first radio button in the group
-                    const radioRequired = (required && index === 0) ? 'required' : '';
-                    inputHTML += `
-                        <label>
-                            <input type="radio" name="${field.field_name}" value="${option.trim()}" ${radioRequired} />
-                            ${option.trim()}
-                        </label>
-                    `;
-                });
-                inputHTML += '</div>';
-                break;
-            case 'textarea':
-                inputHTML = `<textarea id="${field.field_name}" name="${field.field_name}" rows="4" ${required}></textarea>`;
-                break;
+        window.scrollTo(0, start * (1 - ease));
+
+        if (progress < 1) {
+            requestAnimationFrame(scrollStep);
         }
-        
-        div.innerHTML = `
-            <label for="${field.field_name}">${field.field_label}${field.required ? ' *' : ''}</label>
-            ${inputHTML}
-        `;
-        
-        container.appendChild(div);
-    });
-    
-    console.log('Form rendered with', fields.length, 'fields'); // Debug log
-    console.log('Form container children count:', container.children.length); // Debug log
+    }
+
+    requestAnimationFrame(scrollStep);
 }
 
 document.getElementById('dataForm').addEventListener('submit', async function(e) {
@@ -150,21 +120,23 @@ document.getElementById('dataForm').addEventListener('submit', async function(e)
     console.log(data);
     
     try {
-        const response = await fetch('/api/download-excel', {
+        const response = await fetch('/api/addDataEntry', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json',"content-encoding":"gzip" },
             body: pako.gzip(JSON.stringify({ projectId: 1, data: data }))
         });
         
         if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'patient_data.xlsx';
-            a.click();
-            window.URL.revokeObjectURL(url);
-            showAlert('Excel file downloaded successfully!');
+            // const blob = await response.blob();
+            // const url = window.URL.createObjectURL(blob);
+            // const a = document.createElement('a');
+            // a.href = url;
+            // a.download = 'patient_data.xlsx';
+            // a.click();
+            // window.URL.revokeObjectURL(url);
+
+            showAlert('Data Entry added Successfully');
+            scrollToTop(800);
         }
         else {
             throw new Error('Failed to save record');
@@ -181,10 +153,10 @@ function clearForm() {
 
 async function loadRecords() {
     try {
-        const response = await fetch('/api/records/1');
-        const records = await response.json();
-        currentRecords = records;
-        renderRecordsTable(records);
+        const response = await fetch('/api/getRecords');
+        const data = await response.json();
+        console.log(data.records)
+        renderRecordsTable(data.records);
     } catch (error) {
         console.error('Error loading records:', error);
         showAlert('Error loading records', 'error');
@@ -194,113 +166,35 @@ async function loadRecords() {
 function renderRecordsTable(records) {
     const header = document.getElementById('records-header');
     const body = document.getElementById('records-body');
-    
-    if (records.length === 0) {
+
+    if (!records || records.length === 0) {
         header.innerHTML = '<th>No records found</th>';
         body.innerHTML = '';
         return;
     }
 
-    // Get all unique field names
-    const fieldNames = [...new Set(records.map(r => r.field_name))];
-    
+    // Use currentFields (from /api/fields) to get proper order + labels
+    console.log(currentFields)
+    const fieldNames = currentFields.map(f => f.label);
+
     // Create header
-    header.innerHTML = '<th>Record ID</th>' + fieldNames.map(name => 
-        `<th>${currentFields.find(f => f.field_name === name)?.field_label || name}</th>`
+    header.innerHTML = '<th>Record ID</th>' + fieldNames.map(name =>
+        `<th>${currentFields.find(f => f.label === name)?.label || name}</th>`
     ).join('');
 
-    // Group records by record_id
-    const groupedRecords = {};
+    // Create rows
+    let html = ``;
+
     records.forEach(record => {
-        if (!groupedRecords[record.record_id]) {
-            groupedRecords[record.record_id] = {};
-        }
-        groupedRecords[record.record_id][record.field_name] = record.field_value;
+    html += '<tr><td>' + record.id + '</td>' +
+        fieldNames.map(fn => `<td>${record[fn] || ''}</td>`).join('') +
+        '</tr>';
     });
 
-    // Create rows
-    body.innerHTML = Object.keys(groupedRecords).map(recordId => {
-        const record = groupedRecords[recordId];
-        return '<tr><td>' + recordId + '</td>' + 
-               fieldNames.map(fieldName => `<td>${record[fieldName] || ''}</td>`).join('') + 
-               '</tr>';
-    }).join('');
+    console.log(html);
+    body.innerHTML = html;
 }
 
-async function exportToExcel() {
-    try {
-        const response = await fetch('/api/export/excel/1');
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'patient_data.xlsx';
-            a.click();
-            window.URL.revokeObjectURL(url);
-            showAlert('Excel file downloaded successfully!');
-        } else {
-            throw new Error('Export failed');
-        }
-    } catch (error) {
-        console.error('Error exporting to Excel:', error);
-        showAlert('Error exporting to Excel', 'error');
-    }
-}
-
-async function exportToCSV() {
-    try {
-        const response = await fetch('/api/export/csv/1');
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'patient_data.csv';
-            a.click();
-            window.URL.revokeObjectURL(url);
-            showAlert('CSV file downloaded successfully!');
-        } else {
-            throw new Error('Export failed');
-        }
-    } catch (error) {
-        console.error('Error exporting to CSV:', error);
-        showAlert('Error exporting to CSV', 'error');
-    }
-}
-
-async function importData() {
-    const fileInput = document.getElementById('import-file');
-    const file = fileInput.files[0];
-    
-    if (!file) {
-        showAlert('Please select a file to import', 'error');
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('projectId', '1');
-
-    try {
-        const response = await fetch('/api/import', {
-            method: 'POST',
-            body: formData
-        });
-
-        if (response.ok) {
-            const result = await response.json();
-            showAlert(`Import successful! ${result.imported} records imported.`);
-            loadRecords();
-            fileInput.value = '';
-        } else {
-            throw new Error('Import failed');
-        }
-    } catch (error) {
-        console.error('Error importing data:', error);
-        showAlert('Error importing data', 'error');
-    }
-}
 
 async function buildForm() {
   const formFieldsDiv = document.getElementById("form-fields");
@@ -365,7 +259,7 @@ async function buildForm() {
         break;
 
       default:
-        dummyValue = field.default || `dummy_${field.name}`;
+        dummyValue = field.default || `${field.name}`;
     }
 
     switch (field.type) {
@@ -446,4 +340,5 @@ async function buildForm() {
 // Initialize
 window.onload = () => {
   buildForm();
+  loadFields();
 };

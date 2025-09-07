@@ -441,3 +441,74 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
 }
+
+.records-container {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-top: 1.5rem;
+  border-radius: 0.75rem;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate; /* allows rounded corners */
+  border-spacing: 0;
+  background: white;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  font-size: 0.95rem;
+}
+
+/* Header styling */
+.table th {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.85rem 1rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table th:first-child {
+  border-top-left-radius: 0.75rem;
+}
+
+.table th:last-child {
+  border-top-right-radius: 0.75rem;
+}
+
+/* Cell styling */
+.table td {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #e5e7eb;
+  color: #334155;
+  vertical-align: middle;
+}
+
+.table td:first-child {
+  font-weight: 600;
+  color: #475569;
+  text-align: center; /* for IDs */
+  width: 80px;
+}
+
+/* Zebra striping */
+.table tbody tr:nth-child(even) {
+  background-color: #f9fafb;
+}
+
+/* Hover effect */
+.table tbody tr:hover {
+  background: #eef2ff;
+  transition: background 0.2s ease;
+}
+
+/* Last row rounded corners */
+.table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: 0.75rem;
+}
+.table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: 0.75rem;
+}
