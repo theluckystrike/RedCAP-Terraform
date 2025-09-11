@@ -22,7 +22,20 @@ jobs:
       - name: Terraform Init
         run: terraform init -backend-config="bucket=redcap-eu-west-1" -backend-config="key=redcap/dev/terraform.tfstate" -backend-config="region=eu-west-1" -backend-config="dynamodb_table=redcap-eu-west-1"
         working-directory: ./environments/dev
-
+      - name: Empty S3 Bucket
+        run: |
+          aws s3 rm s3://clinical-docs-dev-dev-redcap-exports --recursive
+          # For versioned buckets, delete all versions
+          aws s3api list-object-versions --bucket clinical-docs-dev-dev-redcap-exports \
+            --query 'Versions[].{Key:Key,VersionId:VersionId}' \
+            --output json > objects.json
+          if [ -s objects.json ]; then
+            aws s3api delete-objects --bucket clinical-docs-dev-dev-redcap-exports --delete file://objects.json
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          
       - name: Terraform Destroy
         run: terraform destroy -auto-approve
         working-directory: ./environments/dev
