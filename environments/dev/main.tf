@@ -2,10 +2,10 @@ terraform {
   required_version = ">= 1.6.0"
 
   backend "s3" {
-    bucket         = "my-terraform-states"          # your S3 bucket
+    bucket         = "redcap-eu-west-1"          # your S3 bucket
     key            = "redcap/dev/terraform.tfstate" # path to your state file
     region         = "eu-west-1"                   # AWS region
-    dynamodb_table = "terraform-lock"              # for state locking
+    dynamodb_table = "redcap-eu-west-1"              # for state locking
     encrypt        = true                           # encrypt state at rest
   }
 }
