@@ -6,16 +6,18 @@ const fs = require('fs');
 const multer = require('multer');
 const csv = require("csv-parser");
 const zlib = require('zlib');
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const cron = require("node-cron");
 
 // Middleware
 app.use(express.static('public'));
 
 // Configure multer for file uploads
 const upload = multer({ dest: 'uploads/' });
-
+const s3 = new S3Client({ region: "ap-southeast-2" });
 // Initialize SQLite database
 
 
@@ -24,6 +26,21 @@ let results = [];
 let fields = [];
 const db = new sqlite3.Database("./data.db");
 
+
+const uploadToS3 = async (filePath, bucketName) => {
+  const fileContent = fs.readFileSync(filePath);
+  const fileName = path.basename(filePath);
+
+  const command = new PutObjectCommand({
+    Bucket: bucketName,
+    Key: `incoming/${fileName}`,
+    Body: fileContent,
+    ServerSideEncryption: "AES256"
+  });
+
+  await s3.send(command);
+  console.log(`Uploaded ${fileName} to S3://${bucketName}/incoming/`);
+};
 
 const prepareData = () => {
   results.length = 0;
@@ -86,11 +103,44 @@ const prepareData = () => {
   });
 };
 
+const exportNewDataToExcel = async () => {
+  return new Promise((resolve, reject) => {
+    const sql = `
+      SELECT * FROM my_table 
+      WHERE created_at >= datetime('now', '-1 hour')
+    `;
+    db.all(sql, [], async (err, rows) => {
+      if (err) return reject(err);
+      if (rows.length === 0) return resolve(null);
+
+      try {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('NewData');
+
+        // Add headers
+        worksheet.addRow(Object.keys(rows[0]));
+
+        // Add rows
+        rows.forEach(row => worksheet.addRow(Object.values(row)));
+
+        // Write to temp file
+        const filePath = path.join(__dirname, `export_${Date.now()}.xlsx`);
+        await workbook.xlsx.writeFile(filePath);
+
+        resolve(filePath);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+};
+
 
 const createTable = () => {
   const columns = fields.map(f => `"${f.replace(/"/g, '""')}" TEXT`).join(", ");
   const sql = `CREATE TABLE IF NOT EXISTS my_table (
-    id INTEGER PRIMARY KEY AUTOINCREMENT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ${columns ? ", " + columns : ""}
   )`;
   db.run(sql, (err) => {
@@ -224,6 +274,21 @@ app.listen(PORT, async () => {
     console.log(`REDCap-style server running on http://localhost:${PORT}`);
   } catch (err) {
     console.error("Error preparing data:", err);
+  }
+});
+
+cron.schedule("0 * * * *", async () => {
+  console.log("Running hourly job...");
+  try {
+    const filePath = await exportNewDataToExcel();
+    if (filePath) {
+      await uploadToS3(filePath, "clinical-docs-dev-dev-redcap-exports");
+      fs.unlinkSync(filePath); // clean up local file
+    } else {
+      console.log("No new data in the last hour.");
+    }
+  } catch (err) {
+    console.error("Cron job failed:", err);
   }
 });
 
