@@ -26,9 +26,14 @@ def sanitize_and_truncate(name):
     return final
 
 df["SQL_Column_Name"] = df["Variable / Field Name"].apply(sanitize_and_truncate)
+with open("version.txt", "r") as file:
+    version = int(file.read())+1
+    version = str(version)
 
-# Ensure the output folder exists
-output_dir = os.path.join("ansible", "files")
+with open("version.txt", "w") as file:
+    file.write(version)
+
+output_dir = "sql_files/"+version
 os.makedirs(output_dir, exist_ok=True)
 
 # Save the column mapping
