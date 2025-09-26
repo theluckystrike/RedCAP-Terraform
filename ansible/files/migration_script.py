@@ -4,9 +4,19 @@ from sqlalchemy import create_engine, inspect, text
 import boto3
 import datetime
 
-# ---- AWS Config ----
-RDS_INSTANCE_ID = "your-rds-instance-id"
-REGION = "ap-southeast-2"  # change to your region
+import boto3
+
+def get_param(name, decrypt=False):
+    """Fetch parameter from AWS SSM"""
+    ssm = boto3.client("ssm")
+    resp = ssm.get_parameter(Name=name, WithDecryption=decrypt)
+    return resp["Parameter"]["Value"]
+
+# ---- AWS Config from SSM ----
+REGION = get_param("/redcap/dev/region")
+RDS_INSTANCE_ID = get_param("/redcap/dev/rds_instance_id")
+DB_URI = get_param("/redcap/dev/db_uri", decrypt=True)  # SecureString needs decrypt=True
+NUM_PARTS = int(get_param("/redcap/dev/num_parts"))
 
 # ---- CONFIG ----
 with open("version.txt", "r") as file:
@@ -14,10 +24,8 @@ with open("version.txt", "r") as file:
     old_version = str(new_version - 1)
     new_version = str(new_version)
 
-DB_URI = "postgresql+psycopg2://user:password@rds-host:5432/mydb"
 OLD_MAPPING = "sql_files/"+old_version+"/redcap_column_mapping_old.csv"
 NEW_MAPPING = "sql_files/"+new_version+"/redcap_column_mapping.csv"
-NUM_PARTS = 3  # number of shards/tables
 
 engine = create_engine(DB_URI)
 

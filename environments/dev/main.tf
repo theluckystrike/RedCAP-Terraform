@@ -110,6 +110,31 @@ module "rds" {
   depends_on = [module.vpc]
 }
 
+# --- SSM Parameters for RedCap ---
+resource "aws_ssm_parameter" "rds_instance_id" {
+  name  = "/redcap/${var.environment}/rds_instance_id"
+  type  = "String"
+  value = module.rds.db_instance_id
+}
+
+resource "aws_ssm_parameter" "region" {
+  name  = "/redcap/${var.environment}/region"
+  type  = "String"
+  value = var.aws_region
+}
+
+resource "aws_ssm_parameter" "db_uri" {
+  name  = "/redcap/${var.environment}/db_uri"
+  type  = "SecureString"
+  value = module.rds.postgresql_connection_string
+}
+
+resource "aws_ssm_parameter" "num_parts" {
+  name  = "/redcap/${var.environment}/num_parts"
+  type  = "String"
+  value = "3" # or var.num_parts
+}
+
 # module "carbone" {
 #   source = "../../modules/carbone"
 
