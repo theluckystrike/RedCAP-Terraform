@@ -1,14 +1,14 @@
 name: REDCAP CD
 
 on:
-  workflow_dispatch:  # 👈 manual trigger only
+  workflow_dispatch:
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
     env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
     steps:
       - name: Checkout Code
@@ -31,7 +31,6 @@ jobs:
         run: terraform apply -auto-approve tfplan
         working-directory: ./environments/dev
 
-
       - name: Cleanup Plan File
         run: rm -f ./environments/dev/tfplan
         if: always() 
@@ -39,26 +38,38 @@ jobs:
       - name: Set up SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa.pem
-          chmod 600 ~/.ssh/id_rsa.pem
-      
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
       - name: Set Terraform outputs as env
+        working-directory: ./environments/dev
         run: |
-            echo "TF_DB_HOST=$(terraform output -raw db_instance_endpoint_clean)" >> $GITHUB_ENV
-            echo "TF_DB_NAME=$(terraform output -raw db_name)" >> $GITHUB_ENV
-            echo "TF_DB_USER=$(terraform output -raw db_username)" >> $GITHUB_ENV
-            echo "TF_DB_PASS=$(terraform output -raw db_password)" >> $GITHUB_ENV
+          export TF_DB_HOST=$(terraform output -raw db_instance_endpoint_clean | tr -d '\r\n' | sed 's/[^[:print:]]//g')
+          export TF_DB_NAME=$(terraform output -raw db_name | tr -d '\r\n' | sed 's/[^[:print:]]//g')
+          export TF_DB_USER=$(terraform output -raw db_username | tr -d '\r\n' | sed 's/[^[:print:]]//g')
+          export TF_DB_PASS=$(terraform output -raw db_password | tr -d '\r\n' | sed 's/[^[:print:]]//g')
+          export EC2_HOST=$(terraform output -raw ec2_public_ip | tr -d '\r\n')
+
+          echo "TF_DB_HOST=$TF_DB_HOST" >> $GITHUB_ENV
+          echo "TF_DB_NAME=$TF_DB_NAME" >> $GITHUB_ENV
+          echo "TF_DB_USER=$TF_DB_USER" >> $GITHUB_ENV
+          echo "TF_DB_PASS=$TF_DB_PASS" >> $GITHUB_ENV
+          echo "EC2_HOST=$EC2_HOST" >> $GITHUB_ENV
+
+      - name: Add EC2 host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
 
       - name: Install Ansible
         run: sudo apt-get update && sudo apt-get install -y ansible
 
-      # - name: Run Ansible Playbook For Redcap Install
-      #   run: ansible-playbook -i ./ansible/inventory.ini ./ansible/redcap_install.yml
-
       - name: Run Ansible Playbook For RDS Schema Upload
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
         run: ansible-playbook -i ./ansible/inventory.ini ./ansible/rds_schema_upload.yml
 
       - name: Run Ansible Playbook For Redcap Export
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
         run: ansible-playbook -i ./ansible/inventory.ini ./ansible/redcap_export.yml
-
-      
