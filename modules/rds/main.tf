@@ -2,7 +2,7 @@
 
 locals {
   db_name = replace(var.db_name, "-", "_")  # PostgreSQL doesn't allow hyphens in db names
-  
+  db_identifier = lower(replace("${var.project_name}-${var.environment}-postgres", "_", "-"))
   common_tags = merge(
     var.tags,
     {
@@ -202,7 +202,7 @@ resource "aws_kms_alias" "rds" {
 
 # RDS Instance
 resource "aws_db_instance" "main" {
-  identifier = "${var.project_name}-${var.environment}-postgres"
+  identifier = local.db_identifier
 
   # Engine
   engine               = "postgres"
@@ -222,7 +222,7 @@ resource "aws_db_instance" "main" {
 
   # Network
   db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = [aws_security_group.rds.id]
+  vpc_security_group_ids = var.rds_security_group_id != null ? [var.rds_security_group_id] : [aws_security_group.rds.id]
   publicly_accessible    = false
 
   # High Availability

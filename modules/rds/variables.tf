@@ -1,17 +1,5 @@
 # General Configuration
-variable "project_name" {
-  description = "Name of the project"
-  type        = string
-}
 
-variable "environment" {
-  description = "Environment name (dev, stg, prod)"
-  type        = string
-  validation {
-    condition     = contains(["dev", "stg", "prod"], var.environment)
-    error_message = "Environment must be dev, stg, or prod."
-  }
-}
 
 # Network Configuration
 variable "vpc_id" {
@@ -270,9 +258,46 @@ variable "deletion_protection" {
   default     = false
 }
 
+variable "rds_security_group_id" {
+  description = "Security group ID for RDS"
+  type        = string
+  default     = null
+}
+
 # Tags
 variable "tags" {
   description = "Additional tags to apply to all resources"
   type        = map(string)
   default     = {}
+}
+
+variable "project_name" {
+  description = "Project name"
+  type        = string
+  
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.project_name))
+    error_message = "Project name must only contain lowercase letters, numbers, and hyphens."
+  }
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.environment))
+    error_message = "Environment must only contain lowercase letters, numbers, and hyphens."
+  }
+}
+
+variable "db_instance_identifier" {
+  description = "RDS instance identifier (optional, will be auto-generated if not provided)"
+  type        = string
+  default     = ""
+  
+  validation {
+    condition     = var.db_instance_identifier == "" || can(regex("^[a-z0-9-]+$", var.db_instance_identifier))
+    error_message = "DB instance identifier must only contain lowercase letters, numbers, and hyphens."
+  }
 }

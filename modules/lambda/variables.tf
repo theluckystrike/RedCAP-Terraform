@@ -49,3 +49,9 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+variable "db_proxy_endpoint" { type = string }
+variable "secret_arn" { type = string }
+variable "rds_sg_id" {
+  type        = string
+  description = "RDS security group ID for VPC access"
+}

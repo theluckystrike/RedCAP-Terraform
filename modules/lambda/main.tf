@@ -68,10 +68,9 @@ resource "aws_lambda_function" "redcap_excel_processor" {
   source_code_hash = filebase64sha256(var.lambda_package_path)
   environment {
     variables = {
-      DB_HOST     = var.db_host
-      DB_NAME     = var.db_name
-      DB_USER     = var.db_user
-      DB_PASSWORD = var.db_password
+      DB_PROXY_ENDPOINT = var.db_proxy_endpoint
+      DB_NAME           = var.db_name
+      SECRET_ARN        = var.secret_arn
     }
   }
   vpc_config {

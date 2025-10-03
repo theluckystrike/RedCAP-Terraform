@@ -1,38 +1,54 @@
-import boto3
 import os
-import tempfile
-import openpyxl
-import pg8000
+import boto3
+import pandas as pd
+import psycopg2
+from psycopg2 import sql
+import json
+
+DB_NAME = os.environ['DB_NAME']
+DB_PROXY_ENDPOINT = os.environ['DB_PROXY_ENDPOINT']
+SECRET_ARN = os.environ['SECRET_ARN']
+
+# Get credentials from Secrets Manager
+secrets_client = boto3.client('secretsmanager')
+secret = secrets_client.get_secret_value(SecretId=SECRET_ARN)
+creds = json.loads(secret['SecretString'])
+DB_USER = creds['username']
+DB_PASSWORD = creds['password']
 
 def lambda_handler(event, context):
     s3 = boto3.client('s3')
-    bucket = event['Records'][0]['s3']['bucket']['name']
-    key = event['Records'][0]['s3']['object']['key']
+    for record in event['Records']:
+        bucket = record['s3']['bucket']['name']
+        key = record['s3']['object']['key']
+        local_path = f"/tmp/{key.split('/')[-1]}"
+        s3.download_file(bucket, key, local_path)
 
-    with tempfile.NamedTemporaryFile(suffix=".xlsx") as tmp:
-        s3.download_file(bucket, key, tmp.name)
-        workbook = openpyxl.load_workbook(tmp.name)
-        sheet = workbook.active
+        df = pd.read_excel(local_path)
 
-        rows = []
-        for i, row in enumerate(sheet.iter_rows(values_only=True)):
-            if i == 0:
-                headers = row
-            else:
-                rows.append(row)
+        # Connect via RDS Proxy
+        conn = psycopg2.connect(
+            host=DB_PROXY_ENDPOINT,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=5432
+        )
+        cursor = conn.cursor()
+        table_name = "redcap_data"
 
-    conn = pg8000.connect(
-        host=os.environ['DB_HOST'],
-        database=os.environ['DB_NAME'],
-        user=os.environ['DB_USER'],
-        password=os.environ['DB_PASSWORD'],
-        port=5432
-    )
-    cur = conn.cursor()
-    for row in rows:
-        cur.execute("INSERT INTO patients (name, age, diagnosis) VALUES (%s, %s, %s)", row)
-    conn.commit()
-    cur.close()
-    conn.close()
+        for _, row in df.iterrows():
+            columns = list(row.index)
+            values = [row[col] for col in columns]
+            insert_query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+                sql.Identifier(table_name),
+                sql.SQL(', ').join(map(sql.Identifier, columns)),
+                sql.SQL(', ').join(sql.Placeholder() * len(values))
+            )
+            cursor.execute(insert_query, values)
 
-    return {"status": "success", "file": key}
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    return {"statusCode": 200, "body": f"Processed {len(event['Records'])} files."}

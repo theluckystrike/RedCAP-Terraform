@@ -186,3 +186,8 @@ output "postgresql_connection_string" {
   value       = "postgresql://${aws_db_instance.main.username}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/${aws_db_instance.main.db_name}"
   sensitive   = true
 }
+
+output "db_instance_identifier" {
+  description = "The RDS instance identifier"
+  value       = aws_db_instance.main.identifier
+}
