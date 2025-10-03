@@ -1,24 +1,30 @@
 terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 4.12"
+    }
+  }
   required_version = ">= 1.6.0"
 
   backend "s3" {
-    bucket         = "redcap-eu-west-1"          # your S3 bucket
-    key            = "redcap/dev/terraform.tfstate" # path to your state file
-    region         = "eu-west-1"                   # AWS region
-    dynamodb_table = "redcap-eu-west-1"              # for state locking
-    encrypt        = true                           # encrypt state at rest
+    bucket         = "redcap-eu-west-1"
+    key            = "redcap/dev/terraform.tfstate"
+    region         = "eu-west-1"
+    dynamodb_table = "redcap-eu-west-1"
+    encrypt        = true
   }
 }
 
 module "vpc" {
-  source              = "../../modules/vpc"
-  environment         = var.environment
-  project             = var.project
-  vpc_cidr            = var.vpc_cidr
-  public_subnet_cidrs = var.public_subnet_cidrs
+  source               = "../../modules/vpc"
+  environment          = var.environment
+  project              = var.project
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_cidrs  = var.public_subnet_cidrs
   private_subnet_cidrs = var.private_subnet_cidrs
-  db_subnet_cidrs     = var.db_subnet_cidrs
-  create_ha_nat       = var.create_ha_nat
+  db_subnet_cidrs      = var.db_subnet_cidrs
+  create_ha_nat        = var.create_ha_nat
 }
 
 module "ec2_redcap" {
@@ -28,9 +34,10 @@ module "ec2_redcap" {
   key_name         = var.key_name
   private_key_path = var.private_key_path
   vpc_id           = module.vpc.vpc_id
-  subnet_id        = module.vpc.public_subnet_ids[0]  # first public subnet
+  subnet_id        = module.vpc.public_subnet_ids[0]
 }
 
+# Security Group for Lambda
 resource "aws_security_group" "lambda" {
   name_prefix = "${var.project_name}-${var.environment}-lambda-sg"
   vpc_id      = module.vpc.vpc_id
@@ -47,20 +54,76 @@ resource "aws_security_group" "lambda" {
   }
 }
 
-module "lambda" {
-  source              = "../../modules/lambda"
-  project_name        = var.project_name
-  environment         = var.environment
-  lambda_package_path = "lambda_function.zip"
-  db_host             = var.db_host
-  db_name             = module.rds.db_name
-  db_user             = module.rds.db_username
-  db_password         = module.rds.db_password
-  lambda_subnet_ids   = module.vpc.private_subnet_ids
-  lambda_security_group_id = aws_security_group.lambda.id
-  rds_security_group_id = module.rds.rds_sg_id 
-  vpc_id              = module.vpc.vpc_id
-  tags                = var.tags
+# Security Group for RDS Proxy
+resource "aws_security_group" "rds_proxy" {
+  name        = "${var.project_name}-${var.environment}-rds-proxy-sg"
+  description = "Security group for RDS Proxy"
+  vpc_id      = module.vpc.vpc_id
+  
+  ingress {
+    description     = "PostgreSQL from Lambda"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lambda.id]
+  }
+
+  ingress {
+    description = "PostgreSQL from VPC"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [module.vpc.vpc_cidr]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-rds-proxy-sg"
+    Environment = var.environment
+  }
+}
+
+# Security Group for RDS
+resource "aws_security_group" "rds" {
+  name        = "${var.project_name}-${var.environment}-rds-sg"
+  description = "Security group for RDS database"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description     = "PostgreSQL from RDS Proxy"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.rds_proxy.id]
+  }
+
+  ingress {
+    description     = "PostgreSQL from Lambda (direct access if needed)"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lambda.id]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-rds-sg"
+    Environment = var.environment
+  }
 }
 
 module "rds" {
@@ -101,59 +164,165 @@ module "rds" {
 
   auto_minor_version_upgrade = var.auto_minor_version_upgrade
   apply_immediately          = var.apply_immediately
-  
-  lambda_security_group_id = aws_security_group.lambda.id
-  private_route_table_id = module.vpc.private_route_table_id
 
-  tags = var.tags
+  lambda_security_group_id = aws_security_group.lambda.id
+  private_route_table_id   = module.vpc.private_route_table_id
   
+  # Pass the RDS security group we created above
+  rds_security_group_id = aws_security_group.rds.id
+  
+  tags = var.tags
+
   depends_on = [module.vpc]
 }
 
-# --- SSM Parameters for RedCap ---
-resource "aws_ssm_parameter" "rds_instance_id" {
-  name  = "/redcap/${var.environment}/rds_instance_id"
-  type  = "String"
-  value = module.rds.db_instance_id
+# Store RDS credentials in Secrets Manager for RDS Proxy
+resource "aws_secretsmanager_secret" "rds_credentials" {
+  name        = "/redcap/${var.environment}/db_credentials"
+  description = "RDS credentials for ${var.project_name} in ${var.environment}"
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
 }
 
-resource "aws_ssm_parameter" "region" {
-  name  = "/redcap/${var.environment}/region"
-  type  = "String"
-  value = var.aws_region
+resource "aws_secretsmanager_secret_version" "rds_credentials_version" {
+  secret_id = aws_secretsmanager_secret.rds_credentials.id
+  secret_string = jsonencode({
+    username = module.rds.db_username
+    password = module.rds.db_password
+  })
 }
 
-resource "aws_ssm_parameter" "db_uri" {
-  name  = "/redcap/${var.environment}/db_uri"
-  type  = "SecureString"
-  value = module.rds.postgresql_connection_string
+# IAM Role for RDS Proxy
+resource "aws_iam_role" "rds_proxy_role" {
+  name = "${var.project_name}-${var.environment}-rds-proxy-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "rds.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-rds-proxy-role"
+    Environment = var.environment
+  }
 }
 
-resource "aws_ssm_parameter" "num_parts" {
-  name  = "/redcap/${var.environment}/num_parts"
-  type  = "String"
-  value = "3" # or var.num_parts
+# IAM Policy for RDS Proxy to access Secrets Manager
+resource "aws_iam_role_policy" "rds_proxy_secrets_policy" {
+  name = "${var.project_name}-${var.environment}-rds-proxy-secrets-policy"
+  role = aws_iam_role.rds_proxy_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = aws_secretsmanager_secret.rds_credentials.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
 }
 
-# module "carbone" {
-#   source = "../../modules/carbone"
+# RDS Proxy
+resource "aws_db_proxy" "redcap_proxy" {
+  name                = "${var.project_name}-${var.environment}-rds-proxy"
+  engine_family       = "POSTGRESQL"
+  idle_client_timeout = 1800
+  require_tls         = true
+  debug_logging       = false
+  role_arn            = aws_iam_role.rds_proxy_role.arn
 
-#   project_name           = var.project_name
-#   environment            = var.environment
+  # Fixed: Use module.vpc.db_subnet_ids instead of var.database_subnet_ids
+  vpc_subnet_ids = module.vpc.db_subnet_ids
+  
+  # Fixed: Use rds_proxy security group instead of rds
+  vpc_security_group_ids = [aws_security_group.rds_proxy.id]
 
-#   db_host                = var.db_host
-#   db_name                = module.rds.db_name
-#   db_user                = module.rds.db_username
-#   db_password            = module.rds.db_password
+  auth {
+    auth_scheme = "SECRETS"
+    secret_arn  = aws_secretsmanager_secret.rds_credentials.arn
+    iam_auth    = "DISABLED"
+  }
 
-#   processed_bucket_name  = module.s3.bucket_id
-#   processed_bucket_arn   = module.s3.bucket_arn
+  tags = merge(
+    var.tags,
+    {
+      Name        = "${var.project_name}-${var.environment}-rds-proxy"
+      Environment = var.environment
+    }
+  )
 
-#   carbone_api_token      = var.carbone_api_token
-#   carbone_template_id    = var.carbone_template_id
-# }
+  depends_on = [
+    aws_iam_role_policy.rds_proxy_secrets_policy,
+    aws_secretsmanager_secret_version.rds_credentials_version
+  ]
+}
 
+# Fixed: Use correct resource type
+resource "aws_db_proxy_default_target_group" "default" {
+  db_proxy_name = aws_db_proxy.redcap_proxy.name
 
+  connection_pool_config {
+    connection_borrow_timeout    = 120
+    max_connections_percent      = 100
+    max_idle_connections_percent = 50
+    session_pinning_filters      = ["EXCLUDE_VARIABLE_SETS"]
+  }
+}
+
+# RDS Proxy Target
+resource "aws_db_proxy_target" "redcap_target" {
+  db_proxy_name = aws_db_proxy.redcap_proxy.name
+  target_group_name = aws_db_proxy_default_target_group.default.name
+  
+  # Fixed: Use output from RDS module
+  db_instance_identifier = module.rds.db_instance_identifier
+}
+
+module "lambda" {
+  source = "../../modules/lambda"
+
+  project_name        = var.project_name
+  rds_sg_id           = aws_security_group.rds.id
+  environment         = var.environment
+  lambda_package_path = "lambda_function.zip"
+  db_host             = var.db_host
+  db_name             = module.rds.db_name
+  db_user             = module.rds.db_username
+  db_password         = module.rds.db_password
+  lambda_subnet_ids   = module.vpc.private_subnet_ids
+  lambda_security_group_id = aws_security_group.lambda.id
+  rds_security_group_id    = aws_security_group.rds.id
+  db_proxy_endpoint        = aws_db_proxy.redcap_proxy.endpoint
+  secret_arn               = aws_secretsmanager_secret.rds_credentials.arn
+  vpc_id                   = module.vpc.vpc_id
+  tags                     = var.tags
+
+  depends_on = [aws_db_proxy.redcap_proxy]
+}
 
 module "s3" {
   source = "../../modules/s3"
@@ -169,11 +338,11 @@ module "s3" {
   enable_versioning      = var.s3_enable_versioning
   enable_lifecycle_rules = var.s3_enable_lifecycle_rules
 
-  processed_transition_days           = var.s3_processed_transition_days
-  processed_glacier_days              = var.s3_processed_glacier_days
-  processed_expiration_days           = var.s3_processed_expiration_days
-  failed_expiration_days              = var.s3_failed_expiration_days
-  incoming_expiration_days            = var.s3_incoming_expiration_days
+  processed_transition_days          = var.s3_processed_transition_days
+  processed_glacier_days             = var.s3_processed_glacier_days
+  processed_expiration_days          = var.s3_processed_expiration_days
+  failed_expiration_days             = var.s3_failed_expiration_days
+  incoming_expiration_days           = var.s3_incoming_expiration_days
   noncurrent_version_expiration_days = var.s3_noncurrent_version_expiration_days
 
   enable_event_notifications = var.s3_enable_event_notifications
@@ -195,10 +364,35 @@ module "s3" {
 
   tags = var.tags
 
-  # ✅ Fix: Ensure Lambda is created before S3 attempts to configure notification
   depends_on = [module.lambda]
 }
 
+# SSM Parameters for RedCap
+resource "aws_ssm_parameter" "rds_instance_id" {
+  name  = "/redcap/${var.environment}/rds_instance_id"
+  type  = "String"
+  value = module.rds.db_instance_identifier
+}
+
+resource "aws_ssm_parameter" "region" {
+  name  = "/redcap/${var.environment}/region"
+  type  = "String"
+  value = var.aws_region
+}
+
+resource "aws_ssm_parameter" "db_uri" {
+  name  = "/redcap/${var.environment}/db_uri"
+  type  = "SecureString"
+  value = module.rds.postgresql_connection_string
+}
+
+resource "aws_ssm_parameter" "num_parts" {
+  name  = "/redcap/${var.environment}/num_parts"
+  type  = "String"
+  value = "3"
+}
+
+# Outputs
 output "infrastructure_summary" {
   description = "Summary of deployed infrastructure"
   value = {
@@ -221,6 +415,11 @@ output "infrastructure_summary" {
       storage_gb     = module.rds.db_instance_allocated_storage
     }
 
+    rds_proxy = {
+      endpoint = aws_db_proxy.redcap_proxy.endpoint
+      port     = 5432
+    }
+
     s3 = {
       bucket_name      = module.s3.bucket_id
       incoming_folder  = module.s3.incoming_folder_uri
@@ -232,7 +431,6 @@ output "infrastructure_summary" {
   sensitive = true
 }
 
-
 output "db_instance_endpoint_clean" {
   description = "RDS endpoint without port"
   value       = regex("^([^:]+)", module.rds.db_instance_endpoint)[0]
@@ -240,7 +438,7 @@ output "db_instance_endpoint_clean" {
 }
 
 output "db_name" {
-  value     = module.rds.db_name
+  value = module.rds.db_name
 }
 
 output "db_username" {
@@ -261,8 +459,26 @@ output "database_connection" {
     database_name     = module.rds.db_name
     username          = module.rds.db_username
     connection_string = module.rds.postgresql_connection_string
+    proxy_endpoint    = aws_db_proxy.redcap_proxy.endpoint
   }
   sensitive = true
+}
+
+# Fixed: Output now references the correct resource
+output "rds_sg_id" {
+  description = "RDS Security Group ID"
+  value       = aws_security_group.rds.id
+}
+
+output "rds_proxy_sg_id" {
+  description = "RDS Proxy Security Group ID"
+  value       = aws_security_group.rds_proxy.id
+}
+
+output "rds_proxy_endpoint" {
+  description = "RDS Proxy endpoint for Lambda connections"
+  value       = aws_db_proxy.redcap_proxy.endpoint
+  sensitive   = true
 }
 
 output "database_password" {
