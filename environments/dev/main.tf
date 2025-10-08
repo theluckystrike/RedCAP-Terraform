@@ -302,6 +302,15 @@ resource "aws_db_proxy_target" "redcap_target" {
   db_instance_identifier = module.rds.db_instance_identifier
 }
 
+resource "aws_lambda_layer_version" "data_processing_deps" {
+  filename   = "lambda_layer.zip"
+  layer_name = "${var.project_name}-${var.environment}-data-processing-deps"
+  compatible_runtimes = ["python3.11"]
+  description = "Lambda layer for pandas, numpy, psycopg2, openpyxl"
+  license_info = "MIT"
+}
+
+
 module "lambda" {
   source = "../../modules/lambda"
 
@@ -319,6 +328,9 @@ module "lambda" {
   db_proxy_endpoint        = aws_db_proxy.redcap_proxy.endpoint
   secret_arn               = aws_secretsmanager_secret.rds_credentials.arn
   vpc_id                   = module.vpc.vpc_id
+
+  lambda_layers = [aws_lambda_layer_version.data_processing_deps.arn]
+
   tags                     = var.tags
 
   depends_on = [aws_db_proxy.redcap_proxy]

@@ -1,4 +1,5 @@
 # Terraform files to ignore
+.lambda_layer/
 *.tfstate
 *.tfstate.*
 .terraform/

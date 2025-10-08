@@ -55,3 +55,8 @@ variable "rds_sg_id" {
   type        = string
   description = "RDS security group ID for VPC access"
 }
+variable "lambda_layers" {
+  description = "List of Lambda layer ARNs to attach"
+  type        = list(string)
+  default     = []
+}

@@ -4,6 +4,7 @@ import pandas as pd
 import psycopg2
 from psycopg2 import sql
 import json
+# import logging
 
 DB_NAME = os.environ['DB_NAME']
 DB_PROXY_ENDPOINT = os.environ['DB_PROXY_ENDPOINT']
@@ -15,6 +16,20 @@ secret = secrets_client.get_secret_value(SecretId=SECRET_ARN)
 creds = json.loads(secret['SecretString'])
 DB_USER = creds['username']
 DB_PASSWORD = creds['password']
+
+# logger = logging.getLogger()
+# if not logger.hasHandlers():
+#     handler = logging.StreamHandler()   # send logs to stdout
+#     logger.addHandler(handler)
+# logger.setLevel(logging.INFO)
+
+# def lambda_handler(event, context):
+#     secret_arn = os.environ['SECRET_ARN']
+#     client = boto3.client('secretsmanager')
+#     logger.info(f"Fetching secret {secret_arn}")
+#     response = client.get_secret_value(SecretId=secret_arn)
+#     logger.info("Secret fetched successfully")
+#     return {"status": "ok"}
 
 def lambda_handler(event, context):
     s3 = boto3.client('s3')

@@ -1,24 +1,25 @@
-#!/bin/bash
-set -e
+# Run Amazon Linux container
+docker run -it --rm -v "$PWD":/var/task amazonlinux:2023 bash
 
-LAYER_NAME="redcap_deps_layer"
-ZIP_NAME="redcap_layer.zip"
+# Inside the container:
+yum install -y python3.11 python3.11-pip zip gcc gcc-c++ make postgresql-devel
 
-# Clean old builds
-rm -rf python $ZIP_NAME
-mkdir -p python
+# Create the correct layer structure
+mkdir -p /var/task/python
 
-# Install dependencies in a clean Linux Docker environment
-docker run --rm -v "$PWD":/var/task lambci/lambda:build-python3.11 bash -c "
-    pip install numpy pandas pg8000 psycopg2-binary boto3 -t /var/task/python
-    cd python
-    # Strip unnecessary files to reduce size
-    find . -name '*.dist-info' -type d -exec rm -rf {} +
-    find . -name 'tests' -type d -exec rm -rf {} +
-    find . -name '*.so' -exec strip {} + || true
-"
+# Install packages directly into the python folder
+pip3.11 install psycopg2-binary openpyxl -t /var/task/python
 
-# Zip the layer
-zip -r $ZIP_NAME python
+# Remove unnecessary files to reduce size
+cd /var/task/python
+find . -type d -name "tests" -exec rm -rf {} +
+find . -type d -name "__pycache__" -exec rm -rf {} +
+find . -name "*.pyc" -delete
+find . -name "*.so" -exec strip {} \; 2>/dev/null || true
 
-echo "✅ Layer zip created: $ZIP_NAME (Linux build, smaller size)"
+# Zip the layer from the correct location
+cd /var/task
+zip -r9 lambda_layer.zip python
+
+# Exit container
+exit
