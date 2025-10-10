@@ -20,7 +20,7 @@
 
     - name: Upload SQL files to EC2 instance
       copy:
-        src: "files/{{ item }}"
+        src: "sql_files/2/{{ item }}"
         dest: "/tmp/{{ item }}"
         mode: '0644'
       loop: "{{ sql_files }}"
@@ -33,7 +33,7 @@
 
     - name: Apply each SQL schema file to PostgreSQL RDS
       shell: >
-        timeout 120s psql -h {{ db_host }} -p 5432 -U {{ db_user }} -d {{ db_name }} -v ON_ERROR_STOP=1 -f /tmp/{{ item }}
+        timeout 600s psql -h {{ db_host }} -p 5432 -U {{ db_user }} -d {{ db_name }} -v ON_ERROR_STOP=1 -f /tmp/{{ item }}
       loop: "{{ sql_files }}"
       environment:
         PGPASSWORD: "{{ db_password }}"

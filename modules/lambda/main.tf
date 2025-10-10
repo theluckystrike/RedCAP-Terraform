@@ -105,7 +105,8 @@ resource "aws_lambda_function" "redcap_excel_processor" {
   filename         = var.lambda_package_path
   source_code_hash = filebase64sha256(var.lambda_package_path)
   layers           = local.all_layers
-
+  timeout     = 300      # 5 minutes (default is 3 seconds!)
+  memory_size = 1024
   environment {
     variables = {
       DB_PROXY_ENDPOINT = var.db_proxy_endpoint

@@ -6,8 +6,8 @@ import re
 df = pd.read_csv("Testing_DataDictionary_2025-08-27.csv")
 
 # Ensure required column is present
-if 'Variable / Field Name' not in df.columns:
-    raise ValueError("Missing column 'Variable / Field Name' in CSV")
+if 'Field Label' not in df.columns:
+    raise ValueError("Missing column 'Field Label' in CSV")
 
 # Create mapping from original to SQL-safe (truncated + sanitized) column names
 used_names = set()
@@ -25,7 +25,7 @@ def sanitize_and_truncate(name):
     used_names.add(final)
     return final
 
-df["SQL_Column_Name"] = df["Variable / Field Name"].apply(sanitize_and_truncate)
+df["SQL_Column_Name"] = df["Field Label"].apply(sanitize_and_truncate)
 with open("version.txt", "r") as file:
     version = int(file.read())+1
     version = str(version)
@@ -38,7 +38,7 @@ os.makedirs(output_dir, exist_ok=True)
 
 # Save the column mapping
 mapping_path = os.path.join(output_dir, "redcap_column_mapping.csv")
-df[["Variable / Field Name", "SQL_Column_Name"]].to_csv(mapping_path, index=False)
+df[["Field Label", "SQL_Column_Name"]].to_csv(mapping_path, index=False)
 
 # Split into 3 roughly equal parts and create SQL
 num_chunks = 3

@@ -54,11 +54,22 @@ resource "aws_security_group" "lambda" {
   }
 }
 
+resource "aws_security_group_rule" "rds_module_from_ec2" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.rds.id
+  source_security_group_id = module.ec2_redcap.security_group_id
+  description              = "PostgreSQL from EC2 RedCAP instance"
+}
+
 # Security Group for RDS Proxy
 resource "aws_security_group" "rds_proxy" {
   name        = "${var.project_name}-${var.environment}-rds-proxy-sg"
   description = "Security group for RDS Proxy"
   vpc_id      = module.vpc.vpc_id
+
   
   ingress {
     description     = "PostgreSQL from Lambda"
@@ -122,6 +133,20 @@ resource "aws_security_group" "rds" {
 
   tags = {
     Name        = "${var.project_name}-${var.environment}-rds-sg"
+    Environment = var.environment
+  }
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id       = module.vpc.vpc_id
+  service_name = "com.amazonaws.${var.aws_region}.s3"   # Gateway endpoint for S3
+  vpc_endpoint_type = "Gateway"
+
+  # Attach to all route tables where private subnets are
+  route_table_ids = module.vpc.private_route_table_ids
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-s3-endpoint"
     Environment = var.environment
   }
 }
