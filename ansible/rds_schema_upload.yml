@@ -1,8 +1,9 @@
 - name: Upload and create REDCAP schema tables in RDS
   hosts: redcap
   become: true
-
+  gather_facts: yes
   vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
     db_host: "{{ lookup('env', 'TF_DB_HOST') }}"
     db_name: "{{ lookup('env', 'TF_DB_NAME') }}"
     db_user: "{{ lookup('env', 'TF_DB_USER') }}"
@@ -11,6 +12,13 @@
       - part_1.sql
       - part_2.sql
       - part_3.sql
+      - part_4.sql
+      - part_5.sql
+      - part_6.sql
+      - part_7.sql
+      - part_8.sql
+      - part_9.sql
+      - part_10.sql
 
   tasks:
     - name: Install PostgreSQL client
@@ -20,7 +28,7 @@
 
     - name: Upload SQL files to EC2 instance
       copy:
-        src: "sql_files/2/{{ item }}"
+        src: "sql_files/3/{{ item }}"
         dest: "/tmp/{{ item }}"
         mode: '0644'
       loop: "{{ sql_files }}"
@@ -52,7 +60,7 @@
 
     - name: Verify tables created in PostgreSQL
       shell: >
-        bash -c "PGPASSWORD='{{ db_password }}' psql -h {{ db_host }} -U {{ db_user }} -d {{ db_name }} -c '\\dt'"
+        bash 600s -c "PGPASSWORD='{{ db_password }}' psql -h {{ db_host }} -U {{ db_user }} -d {{ db_name }} -c '\\dt'"
       register: result
       changed_when: false
 
