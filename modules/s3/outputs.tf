@@ -103,3 +103,9 @@ output "bucket_policy_json" {
   description = "The bucket policy as JSON"
   value       = aws_s3_bucket_policy.redcap_exports.policy
 }
+
+
+output "bucket_name" {
+  description = "The name of the bucket"
+  value       = aws_s3_bucket.redcap_exports.bucket
+}

@@ -25,6 +25,26 @@
       apt:
         name: postgresql-client
         update_cache: yes
+        state: present
+
+    - name: Test RDS connectivity
+      shell: |
+        PGPASSWORD="{{ db_password }}" psql \
+          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          -c "SELECT version();"
+      register: connectivity_test
+      failed_when: false
+      changed_when: false
+
+    - name: Display connectivity test result
+      debug:
+        msg: "{{ connectivity_test.stdout_lines }}"
+      when: connectivity_test.rc == 0
+
+    - name: Fail if RDS is unreachable
+      fail:
+        msg: "Cannot connect to RDS: {{ connectivity_test.stderr }}"
+      when: connectivity_test.rc != 0
 
     - name: Upload SQL files to EC2 instance
       copy:
@@ -34,17 +54,22 @@
       loop: "{{ sql_files }}"
 
     - name: Confirm that SQL file exists before execution
-      shell: ls -lh /tmp/{{ item }}
+      stat:
+        path: "/tmp/{{ item }}"
       loop: "{{ sql_files }}"
       register: file_check
-      changed_when: false
+      failed_when: not file_check.stat.exists
 
     - name: Apply each SQL schema file to PostgreSQL RDS
-      shell: >
-        timeout 600s psql -h {{ db_host }} -p 5432 -U {{ db_user }} -d {{ db_name }} -v ON_ERROR_STOP=1 -f /tmp/{{ item }}
+      shell: |
+        timeout 600s psql \
+          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          -v ON_ERROR_STOP=1 \
+          -f /tmp/{{ item }}
       loop: "{{ sql_files }}"
       environment:
         PGPASSWORD: "{{ db_password }}"
+        PGSSLMODE: "require"
       args:
         executable: /bin/bash
       register: psql_output
@@ -56,14 +81,25 @@
       loop: "{{ psql_output.results }}"
       loop_control:
         label: "{{ item.item }}"
-      when: item.rc == 0  # Only show successful output
+      when: item.rc == 0
 
     - name: Verify tables created in PostgreSQL
-      shell: >
-        bash 600s -c "PGPASSWORD='{{ db_password }}' psql -h {{ db_host }} -U {{ db_user }} -d {{ db_name }} -c '\\dt'"
+      shell: |
+        timeout 600s psql \
+          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          -c '\dt'
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+        PGSSLMODE: "require"
       register: result
       changed_when: false
 
     - name: Output list of created tables
       debug:
         var: result.stdout_lines
+
+    - name: Clean up SQL files
+      file:
+        path: "/tmp/{{ item }}"
+        state: absent
+      loop: "{{ sql_files }}"

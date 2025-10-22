@@ -24,6 +24,12 @@ export TF_DB_USER=$(terraform output -raw db_username)
 export TF_DB_PASS=$(terraform output -raw db_password)
 
 echo "Running Ansible playbook..."
-ansible-playbook -i modules/ansible/inventory.ini modules/ansible/redcap_install.yml
+cd ../../ansible/
+ansible-playbook -i inventory.ini redcap_install.yml
 
-ansible-playbook -i modules/ansible/inventory.ini modules/ansible/rds_schema_upload.yml
+ansible-playbook -i inventory.ini rds_schema_upload.yml
+
+cd ../
+
+TEMPLATE_BUCKET=$(terraform output -raw carbone_template_bucket_name)
+aws s3 cp patient_report.odt s3://$TEMPLATE_BUCKET/templates/

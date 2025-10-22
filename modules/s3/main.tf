@@ -177,9 +177,9 @@ resource "aws_s3_bucket_policy" "redcap_exports" {
   depends_on = [aws_s3_bucket_public_access_block.redcap_exports]
 }
 
-# Event notification configuration (for Lambda triggers)
+## Event notification configuration (for Lambda triggers)
 resource "aws_s3_bucket_notification" "lambda_trigger" {
-  count  = var.enable_event_notifications ? 1 : 0
+  count  = var.enable_event_notifications && var.lambda_function_arn != "" ? 1 : 0
   bucket = aws_s3_bucket.redcap_exports.id
 
   # Lambda function trigger for new Excel files
@@ -201,6 +201,7 @@ resource "aws_s3_bucket_notification" "lambda_trigger" {
 
 # Lambda permission for S3 to invoke function
 resource "aws_lambda_permission" "allow_s3" {
+  count         = var.enable_event_notifications && var.lambda_function_name != "" ? 1 : 0
   statement_id  = "AllowExecutionFromS3Bucket"
   action        = "lambda:InvokeFunction"
   function_name = var.lambda_function_name

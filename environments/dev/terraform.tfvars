@@ -1,3 +1,4 @@
+# Existing configurations...
 environment                     = "dev"
 project                         = "clinical-docs-dev"
 vpc_cidr                        = "10.0.0.0/16"
@@ -10,53 +11,82 @@ az_count                        = 2
 enable_nat_gateway              = true
 single_nat_gateway              = true                 
 enable_flow_logs                = false  
-low_logs_retention_days         = 7        # Shorter retention in dev
-enable_vpc_endpoints            = true     # S3 endpoint is free
-enable_secrets_manager_endpoint = false    # Skip interface endpoints in dev (has hourly cost)
+low_logs_retention_days         = 7
+enable_vpc_endpoints            = true
+enable_secrets_manager_endpoint = false
 
-# RDS Configuration - Minimal for development
+# RDS Configuration
+db_instance_class               = "db.t3.micro"
+allocated_storage               = 20
+max_allocated_storage           = 0
+multi_az                        = false
+backup_retention_period         = 1
+skip_final_snapshot             = true
+deletion_protection             = false
 
-db_instance_class               = "db.t3.micro"   # Smallest instance (~$13/month)
-allocated_storage               = 20              # Minimum storage
-max_allocated_storage           = 0               # No auto-scaling in dev
-multi_az                        = false           # Single AZ for dev
-backup_retention_period         = 1               # Minimal backups
-skip_final_snapshot             = true            # Easy cleanup
-deletion_protection             = false           # Allow easy deletion
+# RDS Monitoring
+enhanced_monitoring_interval    = 0
+performance_insights_enabled    = false
+create_cloudwatch_alarms        = false
+allowed_database_cidr_blocks    = ["10.0.0.0/16"]
 
+# S3 Configuration
+s3_encryption_type              = "AES256"
+s3_enable_versioning            = true
+s3_enable_lifecycle_rules       = true
+s3_processed_transition_days    = 30
+s3_processed_glacier_days       = 60
+s3_processed_expiration_days    = 90
+s3_failed_expiration_days       = 7
+s3_incoming_expiration_days     = 3
+s3_enable_event_notifications   = true
+s3_enable_eventbridge           = false
+s3_enable_cors                  = false
+s3_enable_logging               = false
+s3_create_cloudwatch_alarms     = false
 
-# RDS Monitoring - Minimal
+# EC2
+key_name                        = "my-ec2-key"
+private_key_path                = "~/.ssh/id_rsa"
 
-enhanced_monitoring_interval    = 0           # Disabled to save costs
-performance_insights_enabled    = false       # Disabled to save costs
-create_cloudwatch_alarms        = false       # No alarms in dev
+# ===== NEW: Carbone Lambda Configuration =====
 
-allowed_database_cidr_blocks = ["10.0.0.0/16"]
+# Enable/Disable Carbone Lambda
+enable_carbone_lambda           = true
 
-# S3 Configuration - Development settings
-s3_encryption_type           = "AES256"    # Basic encryption (no KMS cost)
-s3_enable_versioning         = true        # Keep versioning for safety
-s3_enable_lifecycle_rules    = true        # Enable lifecycle for cost savings
+# Carbone API Configuration (choose one)
+# Option 1: Use Carbone Cloud (recommended for dev)
+carbone_api_key                 = ""  # Set via environment variable: export TF_VAR_carbone_api_key="your-key"
 
-# S3 Lifecycle - Aggressive cleanup for dev
-s3_processed_transition_days = 30           # Move to IA after 1 week
-s3_processed_glacier_days    = 60          # Move to Glacier after 1 month
-s3_processed_expiration_days = 90          # Delete after 3 months
-s3_failed_expiration_days    = 7           # Delete failed files after 1 week
-s3_incoming_expiration_days  = 3           # Delete unprocessed files after 3 days
-db_host                      = "mydb.cluster-xyz123.ap-south-1.rds.amazonaws.com"
+# Option 2: Use self-hosted Carbone (uncomment if using)
+# carbone_endpoint                = "http://carbone-service.internal:3000"
 
-# S3 Features
-s3_enable_event_notifications = true       # Lambda Function trigger
-s3_enable_eventbridge        = false       # No EventBridge in dev
-s3_enable_cors               = false       # No CORS needed yet
-s3_enable_logging            = false       # No access logs in dev (save costs)
-s3_create_cloudwatch_alarms  = false       # No alarms in dev
-s3_lambda_function_arn       = "arn:aws:lambda:ap-southeast-2:123456789012:function:process_excel_dev"
+carbone_version                 = "4"
 
-#ec2 
-key_name         = "my-ec2-key"
-private_key_path = "~/.ssh/id_rsa"
+# Lambda Configuration
+carbone_lambda_memory_size      = 1024
+carbone_lambda_timeout          = 300
+
+# S3 Buckets for Carbone (auto-generated if empty)
+template_bucket_name            = ""  # Will create: clinical-docs-dev-dev-carbone-templates
+output_bucket_name              = ""  # Will create: clinical-docs-dev-dev-generated-documents
+
+# Scheduling (disabled for dev)
+enable_scheduled_generation     = false
+schedule_expression             = "cron(0 8 * * ? *)"
+default_record_ids              = []
+default_template_name           = "patient_report.odt"
+
+# Notifications
+notification_emails             = [
+  "ankitgarg9601@gmail.com"
+]
+
+carbone_ami_id = "ami-0b7d8b37ef766b435"
+
+# Monitoring (enabled for dev testing)
+enable_carbone_cloudwatch_alarms = true
+enable_carbone_dashboard         = true
 
 # Tags
 tags = {
@@ -65,5 +95,6 @@ tags = {
   Owner        = "DevTeam"
   CostCenter   = "Development"
   HIPAA        = "false"
-  AutoShutdown = "true"  # Can be used for automated shutdown scripts
+  AutoShutdown = "true"
+  Component    = "Carbone Pipeline"
 }

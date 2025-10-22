@@ -403,3 +403,113 @@ variable "private_key_path" {
   description = "Path to the private key (.pem) used by Ansible for SSH"
   type        = string
 }
+
+variable "carbone_api_key" {
+  description = "Carbone Cloud API key (optional)"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "carbone_endpoint" {
+  description = "Self-hosted Carbone endpoint URL (optional)"
+  type        = string
+  default     = null
+}
+
+variable "carbone_version" {
+  description = "Carbone API version"
+  type        = string
+  default     = "4"
+}
+
+variable "carbone_lambda_memory_size" {
+  description = "Memory size for Carbone Lambda in MB"
+  type        = number
+  default     = 1024
+}
+
+variable "carbone_lambda_timeout" {
+  description = "Timeout for Carbone Lambda in seconds"
+  type        = number
+  default     = 300
+}
+
+variable "enable_carbone_lambda" {
+  description = "Enable Carbone Lambda deployment"
+  type        = bool
+  default     = true
+}
+
+variable "enable_scheduled_generation" {
+  description = "Enable scheduled document generation"
+  type        = bool
+  default     = false
+}
+
+variable "schedule_expression" {
+  description = "EventBridge schedule expression for document generation"
+  type        = string
+  default     = "cron(0 8 * * ? *)"
+}
+
+variable "default_record_ids" {
+  description = "Default record IDs for scheduled generation"
+  type        = list(number)
+  default     = []
+}
+
+variable "default_template_name" {
+  description = "Default template name for document generation"
+  type        = string
+  default     = "patient_report.odt"
+}
+
+variable "notification_emails" {
+  description = "Email addresses for document generation notifications"
+  type        = list(string)
+  default     = []
+}
+
+variable "template_bucket_name" {
+  description = "Name of S3 bucket for Carbone templates (leave empty for auto-generated)"
+  type        = string
+  default     = ""
+}
+
+variable "output_bucket_name" {
+  description = "Name of S3 bucket for generated documents (leave empty for auto-generated)"
+  type        = string
+  default     = ""
+}
+
+variable "enable_carbone_cloudwatch_alarms" {
+  description = "Enable CloudWatch alarms for Carbone Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "enable_carbone_dashboard" {
+  description = "Enable CloudWatch dashboard for Carbone pipeline"
+  type        = bool
+  default     = true
+}
+
+variable "carbone_instance_type" {
+  description = "EC2 instance type for Carbone"
+  type        = string
+  default     = "t3.small"
+}
+
+variable "carbone_ami_id" {
+  description = "Carbone AMI ID from AWS Marketplace"
+  type        = string
+  default     = ""
+}
+
+
+variable "high_logs_retention_days" {
+  description = "CloudWatch log retention for high-priority logs"
+  type        = number
+  default     = 30
+}
