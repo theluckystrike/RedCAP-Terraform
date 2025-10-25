@@ -223,3 +223,21 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "lambda_layers" {
+  description = "List of Lambda layer ARNs to attach to the function"
+  type        = list(string)
+  default     = []
+}
+
+variable "use_aws_data_wrangler" {
+  description = "Whether to include AWS Data Wrangler layer (includes psycopg2, pandas, boto3)"
+  type        = bool
+  default     = false
+}
+
+variable "aws_data_wrangler_layer_arn" {
+  description = "ARN of AWS Data Wrangler layer (optional, used if use_aws_data_wrangler is true)"
+  type        = string
+  default     = "arn:aws:lambda:ap-southeast-2:336392948345:layer:AWSSDKPandas-Python311:23"
+}

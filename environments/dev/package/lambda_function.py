@@ -255,8 +255,8 @@ def lambda_handler(event, context):
     and automatically triggers document generation for new records.
     """
     logger.info("🚀 Lambda function started")
-    logger.info(f"   Request ID: {context.request_id if context else 'LOCAL'}")
-    logger.info(f"   Timestamp: {datetime.now().isoformat()}")
+    logger.info(f"Request ID: {context.aws_request_id if context else 'LOCAL'}")
+    logger.info(f"Timestamp: {datetime.now().isoformat()}")
     
     # Environment variables
     DB_NAME = os.environ['DB_NAME']

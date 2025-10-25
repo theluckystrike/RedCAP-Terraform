@@ -36,7 +36,7 @@ def lambda_handler(event, context):
     execution_start = datetime.now()
     logger.info("="*70)
     logger.info("🚀 Carbone Document Generator Lambda Started")
-    logger.info(f"   Execution ID: {context.request_id if context else 'LOCAL'}")
+    logger.info(f"   Execution ID: {context.aws_request_id if context else 'LOCAL'}")
     logger.info(f"   Timestamp: {execution_start.isoformat()}")
     logger.info("="*70)
     
@@ -78,7 +78,7 @@ def lambda_handler(event, context):
         
         config = Config()
         db_handler = DatabaseHandler(config)
-        carbone_handler = CarboneHandler(config)
+        carbone_handler = CarboneHandler(os.getenv('CARBONE_ENDPOINT'))
         s3_handler = S3Handler(config)
         
         logger.info("✅ All handlers initialized")
@@ -88,6 +88,12 @@ def lambda_handler(event, context):
         
         template_path = s3_handler.download_template(template_name)
         logger.info(f"✅ Template downloaded to: {template_path}")
+        
+        # Read template file into memory once (optimization)
+        logger.info(f"📂 Reading template file into memory...")
+        with open(template_path, 'rb') as template_file:
+            template_bytes = template_file.read()
+        logger.info(f"✅ Template loaded: {len(template_bytes):,} bytes")
         
         # ===== 4. PROCESS RECORDS =====
         logger.info("\n📊 Step 4: Processing records...")
@@ -110,14 +116,15 @@ def lambda_handler(event, context):
                 record_data['generated_at'] = datetime.now().isoformat()
                 record_data['generated_by'] = 'Carbone Lambda'
                 
-                # Generate document
+                # Generate document - FIXED: Pass template_bytes instead of template_path
+                logger.info(f"📄 Generating document with Carbone...")
                 pdf_bytes = carbone_handler.generate_document(
-                    template_path,
+                    template_bytes,  # ✅ Pass bytes, not path
                     record_data,
                     output_format
                 )
                 
-                logger.info(f"✅ Document generated ({len(pdf_bytes)} bytes)")
+                logger.info(f"✅ Document generated ({len(pdf_bytes):,} bytes)")
                 
                 # Upload to S3
                 filename = f"record_{record_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{output_format}"

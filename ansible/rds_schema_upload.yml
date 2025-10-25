@@ -30,7 +30,7 @@
     - name: Test RDS connectivity
       shell: |
         PGPASSWORD="{{ db_password }}" psql \
-          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} " \
           -c "SELECT version();"
       register: connectivity_test
       failed_when: false

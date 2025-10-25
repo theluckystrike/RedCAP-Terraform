@@ -130,16 +130,6 @@ resource "aws_security_group" "rds" {
   }
 }
 
-# Allow EC2 to access RDS
-resource "aws_security_group_rule" "rds_from_ec2" {
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.rds.id
-  source_security_group_id = module.ec2_redcap.security_group_id
-  description              = "PostgreSQL from EC2 RedCAP instance"
-}
 
 # ===== VPC Endpoints =====
 
@@ -421,6 +411,8 @@ module "lambda" {
   ]
 }
 
+
+
 # ===== CARBONE DOCUMENT GENERATION PIPELINE =====
 
 # S3 Bucket for Carbone Templates
@@ -508,6 +500,16 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "output_encryption
       sse_algorithm = "AES256"
     }
   }
+}
+
+resource "aws_security_group_rule" "rds_module_from_ec2" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.rds.id
+  source_security_group_id = module.ec2_redcap.security_group_id
+  description              = "PostgreSQL from EC2 RedCAP instance"
 }
 
 resource "aws_s3_bucket_public_access_block" "output_block" {
@@ -603,7 +605,12 @@ module "carbone_ec2" {
   key_name                  = var.key_name
   log_retention_days        = var.low_logs_retention_days
   enable_cloudwatch_alarms  = var.enable_carbone_cloudwatch_alarms
-  carbone_ami_id            = var.carbone_ami_id  # Add this line
+  carbone_ami_id            = var.carbone_ami_id
+  
+  # ADD THESE THREE LINES:
+  template_bucket_name      = aws_s3_bucket.carbone_templates[0].id
+  output_bucket_name        = aws_s3_bucket.carbone_output[0].id  # Use actual bucket name
+  aws_region                = var.aws_region
   
   alarm_actions = length(var.notification_emails) > 0 ? [aws_sns_topic.carbone_notifications[0].arn] : []
 
@@ -646,6 +653,7 @@ module "carbone_lambda" {
   carbone_api_key  = null
   carbone_endpoint = module.carbone_ec2[0].carbone_endpoint
   carbone_version  = var.carbone_version
+  lambda_layers    = [aws_lambda_layer_version.data_processing_deps.arn]
 
   # SNS Configuration
   sns_topic_arn = length(var.notification_emails) > 0 ? aws_sns_topic.carbone_notifications[0].arn : null
@@ -665,7 +673,6 @@ module "carbone_lambda" {
   default_template_name       = var.default_template_name
 
   # Additional Lambda Layers
-  additional_lambda_layers = []
 
   # Tags
   tags = merge(

@@ -69,3 +69,18 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "template_bucket_name" {
+  description = "S3 bucket name for Carbone templates"
+  type        = string
+}
+
+variable "output_bucket_name" {
+  description = "S3 bucket name for Carbone output files"
+  type        = string
+}
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+}

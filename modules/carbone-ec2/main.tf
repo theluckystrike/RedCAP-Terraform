@@ -28,7 +28,7 @@ locals {
   ami_id = local.use_ami_lookup ? data.aws_ami.carbone[0].id : var.carbone_ami_id
 }
 
-# Security Group for Carbone EC2
+# ===== Security Group for Carbone EC2 =====
 resource "aws_security_group" "carbone_ec2" {
   name_prefix = "${var.project_name}-${var.environment}-carbone-ec2"
   description = "Security group for Carbone EC2 instance"
@@ -78,7 +78,7 @@ resource "aws_security_group" "carbone_ec2" {
   )
 }
 
-# IAM Role for EC2
+# ===== IAM Role for EC2 =====
 resource "aws_iam_role" "carbone_ec2" {
   name = "${var.project_name}-${var.environment}-carbone-ec2-role"
 
@@ -98,17 +98,67 @@ resource "aws_iam_role" "carbone_ec2" {
   tags = var.tags
 }
 
+# ===== SSM Managed Instance Core (for remote access) =====
 resource "aws_iam_role_policy_attachment" "carbone_ec2_ssm" {
   role       = aws_iam_role.carbone_ec2.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# ===== AWS Marketplace Policy =====
+resource "aws_iam_role_policy" "carbone_marketplace" {
+  name = "${var.project_name}-${var.environment}-carbone-marketplace"
+  role = aws_iam_role.carbone_ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "aws-marketplace:MeterUsage",
+          "aws-marketplace:RegisterUsage",
+          "aws-marketplace:ResolveCustomer"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ===== S3 Access Policy =====
+resource "aws_iam_role_policy" "carbone_s3_access" {
+  name = "${var.project_name}-${var.environment}-carbone-s3"
+  role = aws_iam_role.carbone_ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "arn:aws:s3:::${var.template_bucket_name}",
+          "arn:aws:s3:::${var.template_bucket_name}/*",
+          "arn:aws:s3:::${var.output_bucket_name}",
+          "arn:aws:s3:::${var.output_bucket_name}/*"
+        ]
+      }
+    ]
+  })
+}
+
+# ===== IAM Instance Profile =====
 resource "aws_iam_instance_profile" "carbone_ec2" {
   name = "${var.project_name}-${var.environment}-carbone-ec2-profile"
   role = aws_iam_role.carbone_ec2.name
 }
 
-# EC2 Instance
+# ===== EC2 Instance =====
 resource "aws_instance" "carbone" {
   ami           = local.ami_id
   instance_type = var.instance_type
@@ -120,22 +170,11 @@ resource "aws_instance" "carbone" {
 
   key_name = var.key_name
 
-  user_data = <<-EOF
-    #!/bin/bash
-    # Configure Carbone service
-    echo "Starting Carbone configuration..."
-    
-    # Set environment variables
-    export CARBONE_PORT=4000
-    export NODE_ENV=production
-    
-    # Start Carbone service (adjust based on actual AMI startup)
-    systemctl enable carbone 2>/dev/null || true
-    systemctl start carbone 2>/dev/null || true
-    
-    # Log startup
-    echo "Carbone service started on port 4000" >> /var/log/carbone-startup.log
-  EOF
+  user_data_base64 = base64encode(templatefile("${path.module}/user_data.sh", {
+    template_bucket = var.template_bucket_name
+    output_bucket   = var.output_bucket_name
+    aws_region      = var.aws_region
+  }))
 
   tags = merge(
     var.tags,
@@ -145,7 +184,7 @@ resource "aws_instance" "carbone" {
   )
 }
 
-# CloudWatch Log Group for Carbone
+# ===== CloudWatch Log Group =====
 resource "aws_cloudwatch_log_group" "carbone_ec2" {
   name              = "/aws/ec2/${var.project_name}-${var.environment}-carbone"
   retention_in_days = var.log_retention_days
@@ -153,7 +192,7 @@ resource "aws_cloudwatch_log_group" "carbone_ec2" {
   tags = var.tags
 }
 
-# CloudWatch Alarms
+# ===== CloudWatch Alarms =====
 resource "aws_cloudwatch_metric_alarm" "carbone_cpu" {
   count = var.enable_cloudwatch_alarms ? 1 : 0
 
@@ -196,7 +235,7 @@ resource "aws_cloudwatch_metric_alarm" "carbone_status" {
   tags = var.tags
 }
 
-# Outputs
+# ===== Outputs =====
 output "carbone_instance_id" {
   description = "Carbone EC2 instance ID"
   value       = aws_instance.carbone.id

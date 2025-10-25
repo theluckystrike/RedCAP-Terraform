@@ -13,7 +13,7 @@ class Config:
     
     # S3 Configuration
     TEMPLATE_BUCKET = os.environ.get('TEMPLATE_BUCKET', '')
-    OUTPUT_BUCKET = os.environ.get('OUTPUT_BUCKET', '')
+    OUTPUT_BUCKET = os.environ.get('OUTPUT_BUCKET', 'clinical-docs-dev-dev-generated-documents')
     
     # Carbone Configuration
     CARBONE_API_KEY = os.environ.get('CARBONE_API_KEY')

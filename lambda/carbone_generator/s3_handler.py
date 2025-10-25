@@ -21,7 +21,7 @@ class S3Handler:
         logger.info(f"⬇️  Downloading template: {template_name}")
         
         try:
-            template_key = f"templates/{template_name}"
+            template_key = template_name
             local_path = f"/tmp/{template_name}"
             
             self.s3_client.download_file(

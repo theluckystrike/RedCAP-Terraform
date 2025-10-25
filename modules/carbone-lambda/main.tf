@@ -3,9 +3,18 @@
  * Standalone module that integrates with existing infrastructure
  */
 
+
 locals {
   function_name = "${var.project_name}-${var.environment}-carbone-generator"
   
+  aws_data_wrangler_layer_arn = "arn:aws:lambda:ap-southeast-2:336392948345:layer:AWSSDKPandas-Python311:23"
+
+  # Combine AWS layer with any additional layers passed in
+  all_layers = concat(
+    [local.aws_data_wrangler_layer_arn],
+    var.lambda_layers
+  )
+
   # Lambda environment variables
   lambda_environment = {
     DB_NAME            = var.db_name
@@ -81,11 +90,8 @@ resource "aws_lambda_function" "carbone_generator" {
     security_group_ids = [var.lambda_security_group_id]
   }
 
-  layers = concat(
-    [aws_lambda_layer_version.carbone_dependencies.arn],
-    var.additional_lambda_layers
-  )
-
+  layers = local.all_layers
+  
   tracing_config {
     mode = var.enable_xray_tracing ? "Active" : "PassThrough"
   }
