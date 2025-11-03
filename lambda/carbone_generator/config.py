@@ -27,7 +27,8 @@ class Config:
     REGION = os.environ.get('REGION', 'eu-west-1')
     
     # Document Settings
-    DEFAULT_TEMPLATE = 'patient_report.odt'
+    DEFAULT_TEMPLATE = 'patient_report.docx'
+    DEFAULT_OUTPUT_FORMAT = 'docx' 
     PRESIGNED_URL_EXPIRATION = 3600  # 1 hour
     
     # Database Tables

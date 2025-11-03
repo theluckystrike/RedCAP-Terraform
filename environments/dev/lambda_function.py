@@ -219,8 +219,8 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
         # Prepare payload for Carbone Lambda
         carbone_payload = {
             'record_ids': record_ids,
-            'template_name': 'patient_report.odt',
-            'output_format': 'pdf',
+            'template_name': 'patient_report.docx',
+            'output_format': 'docx',
             'trigger_source': 'data_ingestion',
             'triggered_at': datetime.now().isoformat(),
             'metadata': metadata or {}

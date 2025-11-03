@@ -40,23 +40,33 @@ class S3Handler:
             logger.error(f"❌ Template download failed: {str(e)}")
             raise
     
-    def upload_document(self, document_bytes: bytes, filename: str) -> str:
+    def upload_document(self, document_bytes: bytes, filename: str, output_format: str = 'docx') -> str:
         """Upload generated document to S3"""
         logger.info(f"⬆️  Uploading document: {filename}")
         
         try:
             timestamp = datetime.now().strftime('%Y%m%d')
             s3_key = f"generated/{timestamp}/{filename}"
-            
+
+            content_types = {
+            'pdf': 'application/pdf',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'odt': 'application/vnd.oasis.opendocument.text',
+            'txt': 'text/plain'
+        }
+
+            content_type = content_types.get(output_format, 'application/octet-stream')
+
             self.s3_client.put_object(
                 Bucket=self.config.OUTPUT_BUCKET,
                 Key=s3_key,
                 Body=document_bytes,
-                ContentType='application/pdf',
+                ContentType=content_type,
                 ServerSideEncryption='AES256',
                 Metadata={
                     'generated-by': 'carbone-lambda',
-                    'generated-at': datetime.now().isoformat()
+                    'generated-at': datetime.now().isoformat(),
+                    'format': output_format
                 }
             )
             

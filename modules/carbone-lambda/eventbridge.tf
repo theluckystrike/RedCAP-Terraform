@@ -53,7 +53,7 @@ resource "aws_cloudwatch_event_target" "lambda_scheduled" {
   input = jsonencode({
     record_ids    = var.default_record_ids
     template_name = var.default_template_name
-    output_format = "pdf"
+    output_format = "docx"
     batch_mode    = true
   })
 

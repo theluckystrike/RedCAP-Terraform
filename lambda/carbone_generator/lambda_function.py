@@ -29,7 +29,7 @@ def lambda_handler(event, context):
     {
         "record_ids": [1, 2, 3],
         "template_name": "patient_report.odt",
-        "output_format": "pdf"
+        "output_format": "docx"
     }
     """
     
@@ -56,7 +56,7 @@ def lambda_handler(event, context):
         
         record_ids = event.get('record_ids', [])
         template_name = event.get('template_name', Config.DEFAULT_TEMPLATE)
-        output_format = event.get('output_format', 'pdf')
+        output_format = event.get('output_format', 'docx')  # ✅ Default changed to docx
         
         if not record_ids:
             logger.error("❌ No record IDs provided")
@@ -116,19 +116,23 @@ def lambda_handler(event, context):
                 record_data['generated_at'] = datetime.now().isoformat()
                 record_data['generated_by'] = 'Carbone Lambda'
                 
-                # Generate document - FIXED: Pass template_bytes instead of template_path
-                logger.info(f"📄 Generating document with Carbone...")
-                pdf_bytes = carbone_handler.generate_document(
+                # Generate document (DOCX or PDF based on output_format)
+                logger.info(f"📄 Generating {output_format.upper()} document with Carbone...")
+                document_bytes = carbone_handler.generate_document(
                     template_bytes,  # ✅ Pass bytes, not path
                     record_data,
-                    output_format
+                    output_format    # ✅ Pass format (docx/pdf)
                 )
                 
-                logger.info(f"✅ Document generated ({len(pdf_bytes):,} bytes)")
+                logger.info(f"✅ Document generated ({len(document_bytes):,} bytes)")
                 
                 # Upload to S3
                 filename = f"record_{record_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{output_format}"
-                output_key = s3_handler.upload_document(pdf_bytes, filename)
+                output_key = s3_handler.upload_document(
+                    document_bytes,  # ✅ Renamed from pdf_bytes to document_bytes
+                    filename,
+                    output_format    # ✅ Pass format to S3 handler
+                )
                 
                 logger.info(f"✅ Uploaded to S3: {output_key}")
                 
@@ -140,7 +144,8 @@ def lambda_handler(event, context):
                     's3_key': output_key,
                     's3_url': f"s3://{config.OUTPUT_BUCKET}/{output_key}",
                     'presigned_url': presigned_url,
-                    'file_size_bytes': len(pdf_bytes)
+                    'file_size_bytes': len(document_bytes),
+                    'format': output_format  # ✅ Include format in response
                 })
                 
                 statistics['successfully_generated'] += 1
@@ -165,10 +170,11 @@ def lambda_handler(event, context):
         logger.info(f"❌ Failed: {statistics['failed']}")
         logger.info(f"⏱️  Execution Time: {statistics['execution_time_seconds']:.2f}s")
         logger.info(f"📁 Files Generated: {len(generated_files)}")
+        logger.info(f"📑 Output Format: {output_format}")
         logger.info("="*70)
         
         return format_success_response({
-            'message': f'Successfully generated {statistics["successfully_generated"]} document(s)',
+            'message': f'Successfully generated {statistics["successfully_generated"]} {output_format.upper()} document(s)',
             'generated_files': generated_files,
             'statistics': statistics
         })
