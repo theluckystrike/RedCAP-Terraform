@@ -2,7 +2,6 @@
 REDCap Data Ingestion Lambda with Automatic Carbone Document Generation
 Processes Excel files and automatically triggers document generation for new records
 """
-
 import os
 import boto3
 import pandas as pd
@@ -18,7 +17,6 @@ if not logger.hasHandlers():
     handler = logging.StreamHandler()
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
-
 
 def sanitize_and_truncate(name, used_names):
     """
@@ -37,19 +35,48 @@ def sanitize_and_truncate(name, used_names):
     used_names.add(final)
     return final
 
-
 def clean_all_column_names(columns):
     """Clean all column names using the exact same logic as schema generation."""
     used_names = set()
     cleaned_columns = []
-    
     for col in columns:
         cleaned = sanitize_and_truncate(col, used_names)
         cleaned_columns.append(cleaned)
-    
     logger.info(f"Cleaned {len(columns)} column names")
     return cleaned_columns
 
+def generate_encounter_id(patient_id, processing_date):
+    """
+    Generate encounter_id in format: YYYYMMDD_patientID
+    
+    Args:
+        patient_id: Patient identifier
+        processing_date: datetime object for the processing date
+    
+    Returns:
+        String encounter_id or None if patient_id is missing
+    """
+    try:
+        # Handle missing patient ID
+        if pd.isna(patient_id):
+            logger.warning(f"Missing patient_id for encounter_id generation")
+            return None
+        
+        # Format date as YYYYMMDD
+        date_str = processing_date.strftime('%Y%m%d')
+        
+        # Clean patient ID (remove whitespace, special chars, convert to string)
+        patient_id_str = str(patient_id).strip().replace(' ', '_')
+        patient_id_str = re.sub(r'[^\w\-]', '_', patient_id_str)
+        
+        # Generate encounter_id
+        encounter_id = f"{date_str}_{patient_id_str}"
+        
+        return encounter_id
+        
+    except Exception as e:
+        logger.error(f"Error generating encounter_id: {str(e)}")
+        return None
 
 def get_all_redcap_tables(cursor):
     """Dynamically discover all redcap_form_part_* tables"""
@@ -57,7 +84,7 @@ def get_all_redcap_tables(cursor):
         SELECT table_name 
         FROM information_schema.tables 
         WHERE table_schema = 'public' 
-        AND table_name LIKE 'redcap_form_part_%'
+          AND table_name LIKE 'redcap_form_part_%'
         ORDER BY table_name;
     """
     try:
@@ -68,7 +95,6 @@ def get_all_redcap_tables(cursor):
     except Exception as e:
         logger.error(f"Error fetching table list: {str(e)}")
         return []
-
 
 def get_table_columns_from_db(cursor, table_name):
     """Fetch column names from the database table in order"""
@@ -86,7 +112,6 @@ def get_table_columns_from_db(cursor, table_name):
     except Exception as e:
         logger.error(f"Error fetching columns for {table_name}: {str(e)}")
         return []
-
 
 def prepare_value_for_insert(value, max_length=200):
     """
@@ -106,7 +131,6 @@ def prepare_value_for_insert(value, max_length=200):
     
     return value_str
 
-
 def insert_data_to_table(cursor, conn, table_name, df, table_columns):
     """
     Insert data into a specific table using only matching columns.
@@ -115,7 +139,7 @@ def insert_data_to_table(cursor, conn, table_name, df, table_columns):
     available_columns = [col for col in table_columns if col in df.columns]
     
     if not available_columns:
-        logger.warning(f"⚠️  No matching columns found for {table_name}")
+        logger.warning(f"⚠️ No matching columns found for {table_name}")
         return 0, []
     
     logger.info(f"📊 Found {len(available_columns)} matching columns for {table_name}")
@@ -123,7 +147,7 @@ def insert_data_to_table(cursor, conn, table_name, df, table_columns):
     subset_df = df[available_columns].copy()
     
     if subset_df.empty:
-        logger.warning(f"⚠️  No data rows to insert into {table_name}")
+        logger.warning(f"⚠️ No data rows to insert into {table_name}")
         return 0, []
     
     logger.info(f"📊 Preparing to insert {len(subset_df)} rows into {table_name}")
@@ -133,7 +157,7 @@ def insert_data_to_table(cursor, conn, table_name, df, table_columns):
     
     # Add RETURNING clause to capture inserted IDs
     insert_query = f'''
-        INSERT INTO {table_name} ({column_names}) 
+        INSERT INTO {table_name} ({column_names})
         VALUES ({placeholders})
         RETURNING id
     '''
@@ -161,30 +185,28 @@ def insert_data_to_table(cursor, conn, table_name, df, table_columns):
             successful_inserts += 1
             
             if (successful_inserts) % 50 == 0:
-                logger.info(f"   Progress: {successful_inserts}/{len(subset_df)} rows inserted...")
+                logger.info(f"  Progress: {successful_inserts}/{len(subset_df)} rows inserted...")
                 
         except psycopg2.Error as row_error:
             conn.rollback()
             error_msg = str(row_error)
             
             if "row is too big" in error_msg.lower():
-                logger.error(f"   ❌ Row {idx} still too big even with {len(available_columns)} columns!")
-                logger.error(f"   This table needs to be split further in the schema.")
+                logger.error(f"  ❌ Row {idx} still too big even with {len(available_columns)} columns!")
+                logger.error(f"     This table needs to be split further in the schema.")
+                failed_rows.append(idx)
             
-            failed_rows.append(idx)
-            logger.warning(f"   ❌ Row {idx} failed: {error_msg[:150]}")
+            logger.warning(f"  ❌ Row {idx} failed: {error_msg[:150]}")
             continue
     
     logger.info(f"✅ Inserted {successful_inserts}/{len(subset_df)} rows into {table_name}")
-    
     if inserted_ids:
         logger.info(f"📋 Inserted IDs: {inserted_ids[:10]}{'...' if len(inserted_ids) > 10 else ''} (total: {len(inserted_ids)})")
     
     if failed_rows:
-        logger.warning(f"⚠️  Failed to insert {len(failed_rows)} rows: {failed_rows[:5]}")
+        logger.warning(f"⚠️ Failed to insert {len(failed_rows)} rows: {failed_rows[:5]}")
     
     return successful_inserts, inserted_ids
-
 
 def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=None):
     """
@@ -200,11 +222,11 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
         Boolean indicating success
     """
     if not record_ids:
-        logger.warning("⚠️  No record IDs provided - skipping Carbone trigger")
+        logger.warning("⚠️ No record IDs provided - skipping Carbone trigger")
         return False
     
     if not function_name:
-        logger.warning("⚠️  Carbone Lambda function name not configured")
+        logger.warning("⚠️ Carbone Lambda function name not configured")
         return False
     
     logger.info(f"\n{'='*70}")
@@ -246,24 +268,26 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
         logger.error(traceback.format_exc())
         return False
 
-
 def lambda_handler(event, context):
     """
     Main Lambda handler for data ingestion with automatic Carbone triggering.
-    
     Processes Excel files from S3, inserts data into RDS PostgreSQL,
     and automatically triggers document generation for new records.
     """
+    # Capture processing timestamp at the start
+    processing_datetime = datetime.now()
+    
     logger.info("🚀 Lambda function started")
     logger.info(f"Request ID: {context.aws_request_id if context else 'LOCAL'}")
-    logger.info(f"Timestamp: {datetime.now().isoformat()}")
+    logger.info(f"Processing Timestamp: {processing_datetime.isoformat()}")
+    logger.info(f"Processing Date (for encounter_id): {processing_datetime.strftime('%Y%m%d')}")
     
     # Environment variables
     DB_NAME = os.environ['DB_NAME']
     DB_PROXY_ENDPOINT = os.environ['DB_PROXY_ENDPOINT']
     SECRET_ARN = os.environ['SECRET_ARN']
     CARBONE_LAMBDA_FUNCTION_NAME = os.environ.get('CARBONE_LAMBDA_FUNCTION_NAME', '')
-
+    
     # Fetch database credentials
     logger.info("🔐 Fetching database credentials from Secrets Manager...")
     secrets_client = boto3.client('secretsmanager')
@@ -282,7 +306,7 @@ def lambda_handler(event, context):
     all_inserted_ids = []  # Collect all newly inserted record IDs
     files_processed = 0
     carbone_triggered = False
-
+    
     # Process each S3 event record
     for record in event['Records']:
         bucket = record['s3']['bucket']['name']
@@ -298,7 +322,7 @@ def lambda_handler(event, context):
         logger.info("⬇️  Downloading file from S3...")
         s3.download_file(bucket, key, local_path)
         logger.info("✅ Download complete")
-
+        
         # Read Excel file
         logger.info("📖 Reading Excel file...")
         df = pd.read_excel(local_path)
@@ -315,11 +339,57 @@ def lambda_handler(event, context):
             logger.warning("⚠️  DataFrame is empty, skipping insert")
             continue
         
+        # ===== GENERATE ENCOUNTER_ID =====
+        logger.info(f"\n{'─'*70}")
+        logger.info("🆔 GENERATING ENCOUNTER IDs")
+        logger.info(f"{'─'*70}")
+        logger.info(f"📅 Using processing date: {processing_datetime.strftime('%Y-%m-%d')}")
+        
+        # Try to find patient_id column
+        patient_id_candidates = ['patient_id', 'patientid', 'mrn', 'medical_record_number', 'patient_number', 'pt_id']
+        
+        patient_id_col = None
+        
+        # Find matching patient ID column
+        for candidate in patient_id_candidates:
+            if candidate in df.columns:
+                patient_id_col = candidate
+                break
+        
+        if patient_id_col:
+            logger.info(f"✅ Found patient_id column: {patient_id_col}")
+            
+            # Generate encounter_id for each row using current processing date
+            df['encounter_id'] = df[patient_id_col].apply(
+                lambda pid: generate_encounter_id(pid, processing_datetime)
+            )
+            
+            # Log statistics
+            total_rows = len(df)
+            valid_encounter_ids = df['encounter_id'].notna().sum()
+            logger.info(f"📊 Generated {valid_encounter_ids}/{total_rows} encounter IDs")
+            
+            if valid_encounter_ids < total_rows:
+                missing_count = total_rows - valid_encounter_ids
+                logger.warning(f"⚠️  {missing_count} rows missing encounter_id (likely null patient_id)")
+            
+            # Show sample encounter_ids
+            sample_ids = df['encounter_id'].dropna().head(5).tolist()
+            logger.info(f"📋 Sample encounter_ids: {sample_ids}")
+            
+        else:
+            logger.error(f"❌ Could not find patient_id column!")
+            logger.error(f"   Searched for: {patient_id_candidates}")
+            logger.error(f"   Available columns: {df.columns.tolist()[:20]}...")
+            logger.warning(f"⚠️  Proceeding without encounter_id generation")
+        
+        logger.info(f"{'─'*70}")
+        
         # Connect to database
         logger.info(f"🔌 Connecting to database...")
-        
         conn = None
         cursor = None
+        
         try:
             conn = psycopg2.connect(
                 host=DB_PROXY_ENDPOINT,
@@ -356,7 +426,6 @@ def lambda_handler(event, context):
             for table_name in tables:
                 logger.info(f"🔍 Fetching schema for {table_name}...")
                 table_columns = get_table_columns_from_db(cursor, table_name)
-                
                 if table_columns:
                     table_schemas[table_name] = table_columns
             
@@ -368,11 +437,9 @@ def lambda_handler(event, context):
             logger.info(f"Total tables found: {len(table_schemas)}")
             
             df_columns_set = set(df.columns)
-            
             for table_name, table_cols in table_schemas.items():
                 matching = [col for col in table_cols if col in df_columns_set]
                 logger.info(f"{table_name}: {len(table_cols)} cols, {len(matching)} matching")
-            
             logger.info(f"{'─'*70}")
             
             # Process each table
@@ -387,11 +454,7 @@ def lambda_handler(event, context):
                 
                 try:
                     rows_inserted, inserted_ids = insert_data_to_table(
-                        cursor, 
-                        conn,
-                        table_name, 
-                        df, 
-                        table_schemas[table_name]
+                        cursor, conn, table_name, df, table_schemas[table_name]
                     )
                     
                     total_inserted[table_name] += rows_inserted
@@ -427,16 +490,17 @@ def lambda_handler(event, context):
             if conn:
                 conn.close()
             logger.info("🔌 Database connection closed")
-            
-            # Cleanup temporary file
-            if os.path.exists(local_path):
-                os.remove(local_path)
-                logger.info(f"🗑️  Temporary file removed")
-
+        
+        # Cleanup temporary file
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            logger.info(f"🗑️  Temporary file removed")
+    
     # ===== FINAL SUMMARY =====
     logger.info(f"\n{'='*70}")
     logger.info("📊 INSERTION SUMMARY")
     logger.info(f"{'='*70}")
+    logger.info(f"Processing Date: {processing_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Files processed: {files_processed}")
     
     for table, count in sorted(total_inserted.items()):
@@ -460,7 +524,8 @@ def lambda_handler(event, context):
             metadata={
                 'source_file': key if 'key' in locals() else 'unknown',
                 'total_rows': total_rows,
-                'tables_updated': list(total_inserted.keys())
+                'tables_updated': list(total_inserted.keys()),
+                'processing_date': processing_datetime.strftime('%Y%m%d')
             }
         )
     else:
@@ -470,16 +535,16 @@ def lambda_handler(event, context):
     
     # Return response
     return {
-        "statusCode": 200, 
+        "statusCode": 200,
         "body": json.dumps({
             "message": f"Successfully processed {files_processed} file(s)",
+            "processing_date": processing_datetime.strftime('%Y%m%d'),
             "insertions": total_inserted,
             "tables": list(total_inserted.keys()),
             "total_rows": total_rows,
             "inserted_record_count": len(all_inserted_ids),
             "inserted_ids": all_inserted_ids[:20],  # Return first 20 IDs
             "carbone_triggered": carbone_triggered,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": processing_datetime.isoformat()
         }, indent=2, default=str)
     }
-
