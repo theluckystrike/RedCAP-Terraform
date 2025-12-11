@@ -27,7 +27,7 @@ def lambda_handler(event, context):
     
     Event Structure:
     {
-        "record_ids": [1, 2, 3],
+        "record_ids": ["20231215_PAT001", "20231215_PAT002"],  # Now encounter_ids
         "template_name": "patient_report.odt",
         "output_format": "docx"
     }
@@ -54,22 +54,24 @@ def lambda_handler(event, context):
         # ===== 1. VALIDATE INPUT =====
         logger.info("📋 Step 1: Validating input parameters...")
         
-        record_ids = event.get('record_ids', [])
+        # Now expecting encounter_ids instead of record_ids
+        encounter_ids = event.get('record_ids', [])  # Keep 'record_ids' key for backward compatibility
         template_name = event.get('template_name', Config.DEFAULT_TEMPLATE)
-        output_format = event.get('output_format', 'docx')  # ✅ Default changed to docx
+        output_format = event.get('output_format', 'docx')
         
-        if not record_ids:
-            logger.error("❌ No record IDs provided")
-            return format_error_response(400, "No record IDs provided")
+        if not encounter_ids:
+            logger.error("❌ No encounter IDs provided")
+            return format_error_response(400, "No encounter IDs provided")
         
-        if not isinstance(record_ids, list):
+        if not isinstance(encounter_ids, list):
             logger.error("❌ record_ids must be a list")
             return format_error_response(400, "record_ids must be a list")
         
-        statistics['total_requested'] = len(record_ids)
+        statistics['total_requested'] = len(encounter_ids)
         
         logger.info(f"✅ Input validated:")
-        logger.info(f"   - Record IDs: {record_ids}")
+        logger.info(f"   - Encounter IDs: {encounter_ids[:5]}{'...' if len(encounter_ids) > 5 else ''}")
+        logger.info(f"   - Total Encounters: {len(encounter_ids)}")
         logger.info(f"   - Template: {template_name}")
         logger.info(f"   - Output Format: {output_format}")
         
@@ -78,7 +80,7 @@ def lambda_handler(event, context):
         
         config = Config()
         db_handler = DatabaseHandler(config)
-        carbone_handler = CarboneHandler(os.getenv('CARBONE_ENDPOINT'))
+        carbone_handler = CarboneHandler(config.CARBONE_ENDPOINT)
         s3_handler = S3Handler(config)
         
         logger.info("✅ All handlers initialized")
@@ -95,43 +97,48 @@ def lambda_handler(event, context):
             template_bytes = template_file.read()
         logger.info(f"✅ Template loaded: {len(template_bytes):,} bytes")
         
-        # ===== 4. PROCESS RECORDS =====
-        logger.info("\n📊 Step 4: Processing records...")
+        # ===== 4. PROCESS ENCOUNTERS =====
+        logger.info(f"\n📊 Step 4: Processing {len(encounter_ids)} encounters...")
         
-        for idx, record_id in enumerate(record_ids, 1):
+        for idx, encounter_id in enumerate(encounter_ids, 1):
             try:
-                logger.info(f"\n--- Processing Record {idx}/{len(record_ids)} (ID: {record_id}) ---")
+                logger.info(f"\n{'─'*70}")
+                logger.info(f"📋 Processing Encounter {idx}/{len(encounter_ids)}")
+                logger.info(f"   Encounter ID: {encounter_id}")
+                logger.info(f"{'─'*70}")
                 
-                # Fetch data from RDS
-                record_data = db_handler.fetch_record_data(record_id)
+                # Fetch data from RDS using encounter_id
+                record_data = db_handler.fetch_record_data(encounter_id)
                 
                 if not record_data:
-                    logger.warning(f"⚠️  No data found for record ID: {record_id}")
+                    logger.warning(f"⚠️  No data found for encounter ID: {encounter_id}")
                     statistics['failed'] += 1
                     continue
                 
                 logger.info(f"✅ Fetched {record_data['metadata']['total_fields']} fields from database")
+                logger.info(f"   Tables with data: {record_data['metadata']['tables_with_data']}")
                 
                 # Add generation metadata
                 record_data['generated_at'] = datetime.now().isoformat()
                 record_data['generated_by'] = 'Carbone Lambda'
+                record_data['document_format'] = output_format
                 
-                # Generate document (DOCX or PDF based on output_format)
-                logger.info(f"📄 Generating {output_format.upper()} document with Carbone...")
+                # Generate document
+                logger.info(f"\n📄 Generating {output_format.upper()} document with Carbone...")
                 document_bytes = carbone_handler.generate_document(
-                    template_bytes,  # ✅ Pass bytes, not path
+                    template_bytes,
                     record_data,
-                    output_format    # ✅ Pass format (docx/pdf)
+                    output_format
                 )
                 
                 logger.info(f"✅ Document generated ({len(document_bytes):,} bytes)")
                 
                 # Upload to S3
-                filename = f"record_{record_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{output_format}"
+                filename = f"{encounter_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{output_format}"
                 output_key = s3_handler.upload_document(
-                    document_bytes,  # ✅ Renamed from pdf_bytes to document_bytes
+                    document_bytes,
                     filename,
-                    output_format    # ✅ Pass format to S3 handler
+                    output_format
                 )
                 
                 logger.info(f"✅ Uploaded to S3: {output_key}")
@@ -140,19 +147,20 @@ def lambda_handler(event, context):
                 presigned_url = s3_handler.generate_presigned_url(output_key)
                 
                 generated_files.append({
-                    'record_id': record_id,
+                    'encounter_id': encounter_id,
                     's3_key': output_key,
                     's3_url': f"s3://{config.OUTPUT_BUCKET}/{output_key}",
                     'presigned_url': presigned_url,
                     'file_size_bytes': len(document_bytes),
-                    'format': output_format  # ✅ Include format in response
+                    'format': output_format,
+                    'generated_at': datetime.now().isoformat()
                 })
                 
                 statistics['successfully_generated'] += 1
-                logger.info(f"✅ Record {record_id} processed successfully")
+                logger.info(f"✅ Encounter {encounter_id} processed successfully")
                 
             except Exception as e:
-                logger.error(f"❌ Error processing record {record_id}: {str(e)}")
+                logger.error(f"❌ Error processing encounter {encounter_id}: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
                 statistics['failed'] += 1

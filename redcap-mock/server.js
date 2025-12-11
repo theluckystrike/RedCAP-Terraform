@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const zlib = require('zlib');
+const csv = require('csv-parser');
 const { S3Client, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const cron = require("node-cron");
@@ -14,6 +15,37 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.static('public'));
+
+// Middleware to handle gzip compressed requests (must be AFTER express.json())
+app.use((req, res, next) => {
+  if (req.headers['content-encoding'] === 'gzip') {
+    const gunzip = zlib.createGunzip();
+    let buffer = [];
+
+    req.pipe(gunzip);
+
+    gunzip.on('data', (chunk) => {
+      buffer.push(chunk);
+    });
+
+    gunzip.on('end', () => {
+      try {
+        const decompressed = Buffer.concat(buffer).toString();
+        req.body = JSON.parse(decompressed);
+        next();
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    gunzip.on('error', (err) => {
+      next(err);
+    });
+  } else {
+    next();
+  }
+});
+
 app.use(express.json({ limit: '50mb' })); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true, limit: '50mb' })); // Parse URL-encoded bodies
 
@@ -25,6 +57,7 @@ const s3 = new S3Client({ region: "ap-southeast-2" });
 let results = [];
 let fields = [];
 let formSchema = null;
+let columnMapping = null; // Cache for column mapping
 const db = new sqlite3.Database("./data.db");
 
 const uploadToS3 = async (filePath, bucketName) => {
@@ -40,6 +73,35 @@ const uploadToS3 = async (filePath, bucketName) => {
 
   await s3.send(command);
   console.log(`Uploaded ${fileName} to S3://${bucketName}/incoming/`);
+};
+
+// Load column mapping CSV
+const loadColumnMapping = () => {
+  return new Promise((resolve, reject) => {
+    const csvPath = path.join(__dirname, 'column_mapping.csv');
+    
+    if (!fs.existsSync(csvPath)) {
+      console.warn('⚠️  column_mapping.csv not found - sample data filling will use fallback logic');
+      return resolve(null);
+    }
+    
+    const fields = [];
+    
+    fs.createReadStream(csvPath)
+      .pipe(csv())
+      .on('data', (row) => {
+        fields.push(row);
+      })
+      .on('end', () => {
+        console.log(`✅ Loaded column mapping: ${fields.length} field definitions`);
+        columnMapping = { fields };
+        resolve(columnMapping);
+      })
+      .on('error', (error) => {
+        console.error('❌ Error loading column mapping:', error);
+        resolve(null);
+      });
+  });
 };
 
 // Load structured JSON schema
@@ -379,33 +441,36 @@ const insertData = (data) => {
   });
 };
 
-// Middleware to handle gzip compressed requests (must be AFTER express.json())
-app.use((req, res, next) => {
-  if (req.headers['content-encoding'] === 'gzip') {
-    const gunzip = zlib.createGunzip();
-    let buffer = [];
+// ==========================================
+// API ENDPOINTS
+// ==========================================
 
-    req.pipe(gunzip);
-
-    gunzip.on('data', (chunk) => {
-      buffer.push(chunk);
+// Endpoint to serve column mapping CSV as JSON
+app.get('/api/column-mapping', async (req, res) => {
+  try {
+    // Return cached version if available
+    if (columnMapping) {
+      return res.json(columnMapping);
+    }
+    
+    // Load and cache if not yet loaded
+    const mapping = await loadColumnMapping();
+    
+    if (!mapping) {
+      return res.status(404).json({ 
+        error: 'Column mapping file not found',
+        fields: [],
+        message: 'Sample data filling will use fallback logic'
+      });
+    }
+    
+    res.json(mapping);
+  } catch (error) {
+    console.error('Error loading column mapping:', error);
+    res.status(500).json({ 
+      error: 'Failed to load column mapping',
+      fields: []
     });
-
-    gunzip.on('end', () => {
-      try {
-        const decompressed = Buffer.concat(buffer).toString();
-        req.body = JSON.parse(decompressed);
-        next();
-      } catch (err) {
-        next(err);
-      }
-    });
-
-    gunzip.on('error', (err) => {
-      next(err);
-    });
-  } else {
-    next();
   }
 });
 
@@ -711,11 +776,13 @@ app.listen(PORT, async () => {
   
   try {
     await prepareData();
+    await loadColumnMapping(); // Load column mapping on startup
     await createTable();
     
     console.log(`✅ Server running at: http://localhost:${PORT}`);
     console.log(`📊 Total fields loaded: ${fields.length}`);
     console.log(`📂 Categories available: ${formSchema ? Object.keys(formSchema.categories).join(', ') : 'N/A'}`);
+    console.log(`📋 Column mapping: ${columnMapping ? `${columnMapping.fields.length} definitions` : 'Not available (using fallback)'}`);
     console.log(`💾 Storage: JSON format (no column limit)`);
     console.log(`⏰ Hourly S3 upload: Enabled (cron: 0 * * * *)`);
     console.log('='.repeat(70));

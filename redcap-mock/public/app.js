@@ -4,6 +4,7 @@ let isFormLoaded = false;
 let isLoadingFields = false;
 let formSchema = null;
 let activeCategory = 'general';
+let columnMappingData = null; // Store column mapping CSV data
 
 // Initialize
 function showSection(sectionId) {
@@ -85,7 +86,6 @@ async function exportToExcel() {
         console.log('Exporting records:', data.records.length);
         showAlert('Downloading Excel file...', 'info');
         
-        // Try without compression first
         const res = await fetch('/api/download-excel', {
             method: 'POST',
             headers: { 
@@ -268,6 +268,23 @@ function showAlert(message, type = 'success') {
     }, 5000);
 }
 
+async function loadColumnMapping() {
+    if (columnMappingData) {
+        return columnMappingData;
+    }
+    
+    try {
+        const response = await fetch('/api/column-mapping');
+        const data = await response.json();
+        columnMappingData = data;
+        console.log('Loaded column mapping:', data);
+        return data;
+    } catch (error) {
+        console.error('Error loading column mapping:', error);
+        return null;
+    }
+}
+
 async function loadFormSchema() {
     if (isLoadingFields || isFormLoaded) {
         console.log('Schema already loading or loaded, skipping...');
@@ -285,6 +302,9 @@ async function loadFormSchema() {
         formSchema = schema;
         currentFields = extractFieldsFromSchema(schema);
         isFormLoaded = true;
+        
+        // Also load column mapping
+        await loadColumnMapping();
         
         console.log('Extracted fields:', currentFields);
     } catch (error) {
@@ -335,127 +355,220 @@ function scrollToTop(duration = 800) {
     requestAnimationFrame(scrollStep);
 }
 
-// Add sample data function - fills the DATA ENTRY form only
-function fillSampleData() {
-    // First, fill all text/number/date/select/textarea fields with sample data
-    const allInputs = document.querySelectorAll('input:not([type="radio"]):not([type="checkbox"]):not([type="submit"]):not([type="button"]), select, textarea');
+// Get field metadata from column mapping
+function getFieldMetadata(fieldId) {
+    if (!columnMappingData || !columnMappingData.fields) {
+        return null;
+    }
+    
+    return columnMappingData.fields.find(f => 
+        f.Original_Field_ID.toLowerCase() === fieldId.toLowerCase()
+    );
+}
+
+// Generate appropriate sample value based on field metadata
+function generateSampleValue(fieldId, inputElement) {
+    const metadata = getFieldMetadata(fieldId);
+    
+    if (!metadata) {
+        return generateFallbackValue(fieldId, inputElement);
+    }
+    
+    const dataType = metadata.SQL_Data_Type?.toUpperCase() || '';
+    const label = metadata.Label || fieldId;
+    
+    // Handle numeric types
+    if (dataType.includes('INTEGER') || dataType.includes('NUMERIC') || dataType.includes('DECIMAL')) {
+        // Return actual numbers, not strings
+        if (label.toLowerCase().includes('age')) return 45;
+        if (label.toLowerCase().includes('height')) return 175;
+        if (label.toLowerCase().includes('weight')) return 80;
+        if (label.toLowerCase().includes('pressure') || label.toLowerCase().includes('bp')) return 120;
+        if (label.toLowerCase().includes('pulse') || label.toLowerCase().includes('heart')) return 72;
+        if (label.toLowerCase().includes('temp')) return 98.6;
+        if (label.toLowerCase().includes('pain') || label.toLowerCase().includes('score')) return 7;
+        if (label.toLowerCase().includes('count')) return 10;
+        if (label.toLowerCase().includes('level')) return 5;
+        
+        // Default numeric value
+        return Math.floor(Math.random() * 10) + 1;
+    }
+    
+    // Handle date types
+    if (dataType.includes('DATE') || dataType.includes('TIMESTAMP')) {
+        const today = new Date();
+        if (label.toLowerCase().includes('birth')) {
+            const birthDate = new Date(today.getFullYear() - 45, 5, 15);
+            return birthDate.toISOString().split('T')[0];
+        }
+        return today.toISOString().split('T')[0];
+    }
+    
+    // Handle text types
+    if (dataType.includes('VARCHAR') || dataType.includes('TEXT')) {
+        // Use semantic filling for known fields
+        const fieldLower = fieldId.toLowerCase();
+        
+        if (fieldLower.includes('record') && fieldLower.includes('id')) {
+            return 'REC-' + Math.floor(Math.random() * 10000);
+        }
+        if (fieldLower === 'id' || fieldLower === 'patient_id') {
+            return 'PAT-' + Math.floor(Math.random() * 10000);
+        }
+        if (fieldLower.includes('firstname') || fieldLower.includes('first_name') || fieldLower.includes('given')) {
+            return 'John';
+        }
+        if (fieldLower.includes('lastname') || fieldLower.includes('last_name') || fieldLower.includes('surname')) {
+            return 'Doe';
+        }
+        if (fieldLower.includes('email')) {
+            return 'john.doe@example.com';
+        }
+        if (fieldLower.includes('phone') || fieldLower.includes('mobile') || fieldLower.includes('tel')) {
+            return '(555) 123-4567';
+        }
+        if (fieldLower.includes('address')) {
+            return '123 Main Street';
+        }
+        if (fieldLower.includes('city')) {
+            return 'New York';
+        }
+        if (fieldLower.includes('state')) {
+            return 'NY';
+        }
+        if (fieldLower.includes('zip') || fieldLower.includes('postal')) {
+            return '10001';
+        }
+        
+        // For longer text fields, don't use "Sample:" prefix for numeric-type fields
+        if (inputElement.tagName === 'TEXTAREA') {
+            return generateTextareaSample(label);
+        }
+        
+        // For regular text fields, return empty instead of "Sample:" for potential numeric fields
+        return '';
+    }
+    
+    return '';
+}
+
+function generateTextareaSample(label) {
+    const labelLower = label.toLowerCase();
+    
+    if (labelLower.includes('complaint') || labelLower.includes('chief')) {
+        return 'Patient reports shoulder pain and limited range of motion for approximately 3 weeks. Pain is worse with overhead activities and at night.';
+    }
+    if (labelLower.includes('history') || labelLower.includes('medical')) {
+        return 'Hypertension (controlled with medication), Type 2 Diabetes (diet-controlled), no previous surgeries.';
+    }
+    if (labelLower.includes('medication')) {
+        return 'Metformin 500mg twice daily, Lisinopril 10mg once daily, Multivitamin.';
+    }
+    if (labelLower.includes('allerg')) {
+        return 'Penicillin (rash), Sulfa drugs (hives)';
+    }
+    if (labelLower.includes('diagnosis')) {
+        return 'Rotator cuff tendinitis with mild impingement. No evidence of tear on examination.';
+    }
+    if (labelLower.includes('treatment') || labelLower.includes('plan')) {
+        return 'Physical therapy 3x/week for 6 weeks, NSAIDs as needed for pain, ice 20 minutes 3-4x daily, follow-up in 2 weeks.';
+    }
+    
+    return 'Clinical notes for ' + label + '. Patient is cooperative and understands treatment plan.';
+}
+
+function generateFallbackValue(fieldId, inputElement) {
+    const fieldLower = fieldId.toLowerCase();
+    
+    // Numeric fields
+    if (inputElement.type === 'number') {
+        if (fieldLower.includes('age')) return 45;
+        if (fieldLower.includes('pain') || fieldLower.includes('score')) return 7;
+        return Math.floor(Math.random() * 10) + 1;
+    }
+    
+    // Date fields
+    if (inputElement.type === 'date') {
+        const today = new Date();
+        if (fieldLower.includes('birth')) {
+            const birthDate = new Date(today.getFullYear() - 45, 5, 15);
+            return birthDate.toISOString().split('T')[0];
+        }
+        return today.toISOString().split('T')[0];
+    }
+    
+    // Text fields
+    if (fieldLower.includes('record') && fieldLower.includes('id')) {
+        return 'REC-' + Math.floor(Math.random() * 10000);
+    }
+    if (fieldLower.includes('name')) {
+        if (fieldLower.includes('first')) return 'John';
+        if (fieldLower.includes('last')) return 'Doe';
+        return 'John Doe';
+    }
+    if (fieldLower.includes('email')) {
+        return 'john.doe@example.com';
+    }
+    if (fieldLower.includes('phone') || fieldLower.includes('mobile')) {
+        return '(555) 123-4567';
+    }
+    
+    return '';
+}
+
+// Improved fill sample data function
+async function fillSampleData() {
+    // Ensure column mapping is loaded
+    if (!columnMappingData) {
+        showAlert('Loading field metadata...', 'info');
+        await loadColumnMapping();
+    }
+    
+    // Expand all sections first
+    const allHeaders = document.querySelectorAll('.section-header-small.collapsed');
+    const allContents = document.querySelectorAll('.form-fields-grid:not(.expanded)');
+    
+    allHeaders.forEach(header => header.classList.remove('collapsed'));
+    allContents.forEach(content => content.classList.add('expanded'));
+    
+    // Wait for expansion
+    await new Promise(resolve => setTimeout(resolve, 100));
     
     let fieldsFilledCount = 0;
     
+    // Fill text/number/date/select/textarea fields
+    const allInputs = document.querySelectorAll('input:not([type="radio"]):not([type="checkbox"]):not([type="submit"]):not([type="button"]), select, textarea');
+    
     allInputs.forEach(input => {
-        if (input.type === 'text' || input.type === 'email' || input.type === 'tel' || !input.type) {
-            // Check field name/id for context
-            const fieldId = input.id || input.name;
-            const fieldName = fieldId.toLowerCase();
-            
-            if (fieldName.includes('first') && (fieldName.includes('name') || fieldName === 'first')) {
-                input.value = 'John';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('last') && (fieldName.includes('name') || fieldName === 'last')) {
-                input.value = 'Doe';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('name') && !fieldName.includes('first') && !fieldName.includes('last')) {
-                input.value = 'John Doe';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('email')) {
-                input.value = 'john.doe@example.com';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('phone') || fieldName.includes('tel')) {
-                input.value = '(555) 123-4567';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('address')) {
-                input.value = '123 Main Street';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('city')) {
-                input.value = 'New York';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('state')) {
-                input.value = 'NY';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('zip') || fieldName.includes('postal')) {
-                input.value = '10001';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('ssn') || fieldName.includes('social')) {
-                input.value = '123-45-6789';
-                fieldsFilledCount++;
-            } else if (fieldName.includes('id') || fieldName.includes('record')) {
-                input.value = 'REC-' + Math.floor(Math.random() * 10000);
-                fieldsFilledCount++;
-            } else if (input.value === '') {
-                // Only fill if empty
-                const labelText = input.previousElementSibling?.textContent || fieldId;
-                input.value = 'Sample: ' + labelText.replace('*', '').trim();
-                fieldsFilledCount++;
-            }
-        } else if (input.type === 'number') {
-            const fieldId = input.id || input.name;
-            const fieldName = fieldId.toLowerCase();
-            
-            if (fieldName.includes('age')) {
-                input.value = '45';
-            } else if (fieldName.includes('height')) {
-                input.value = '175';
-            } else if (fieldName.includes('weight')) {
-                input.value = '80';
-            } else if (fieldName.includes('pressure') || fieldName.includes('bp')) {
-                input.value = '120';
-            } else if (fieldName.includes('pulse') || fieldName.includes('heart')) {
-                input.value = '72';
-            } else if (fieldName.includes('temp')) {
-                input.value = '98.6';
-            } else if (fieldName.includes('pain') || fieldName.includes('level') || fieldName.includes('score')) {
-                input.value = '7';
-            } else {
-                input.value = Math.floor(Math.random() * 100) + 1;
-            }
-            fieldsFilledCount++;
-        } else if (input.type === 'date') {
-            const today = new Date();
-            const fieldId = input.id || input.name;
-            if (fieldId.toLowerCase().includes('birth')) {
-                // Set birth date to ~45 years ago
-                const birthDate = new Date(today.getFullYear() - 45, 5, 15);
-                input.value = birthDate.toISOString().split('T')[0];
-            } else {
-                // Set to today for visit dates
-                input.value = today.toISOString().split('T')[0];
-            }
-            fieldsFilledCount++;
-        } else if (input.tagName === 'SELECT') {
-            // Select the second option (first is usually blank)
+        const fieldId = input.id || input.name;
+        if (!fieldId) return;
+        
+        let value = '';
+        
+        if (input.tagName === 'SELECT') {
+            // Select first non-empty option
             if (input.options.length > 1) {
                 input.selectedIndex = 1;
                 fieldsFilledCount++;
             }
         } else if (input.tagName === 'TEXTAREA') {
-            const fieldId = input.id || input.name;
-            const fieldName = fieldId.toLowerCase();
-            
-            if (fieldName.includes('complaint') || fieldName.includes('chief')) {
-                input.value = 'Patient reports shoulder pain and limited range of motion for approximately 3 weeks. Pain is worse with overhead activities and at night.';
-            } else if (fieldName.includes('history') || fieldName.includes('medical')) {
-                input.value = 'Hypertension (controlled with medication), Type 2 Diabetes (diet-controlled), no previous surgeries.';
-            } else if (fieldName.includes('medication')) {
-                input.value = 'Metformin 500mg twice daily, Lisinopril 10mg once daily, Multivitamin.';
-            } else if (fieldName.includes('allerg')) {
-                input.value = 'Penicillin (rash), Sulfa drugs (hives)';
-            } else if (fieldName.includes('diagnosis')) {
-                input.value = 'Rotator cuff tendinitis with mild impingement. No evidence of tear on examination.';
-            } else if (fieldName.includes('treatment') || fieldName.includes('plan')) {
-                input.value = 'Physical therapy 3x/week for 6 weeks, NSAIDs as needed for pain, ice 20 minutes 3-4x daily, follow-up in 2 weeks.';
-            } else if (fieldName.includes('note') || fieldName.includes('comment')) {
-                input.value = 'Patient is motivated and compliant. Understands treatment plan and restrictions. Will call if symptoms worsen.';
-            } else {
-                const labelText = input.previousElementSibling?.textContent || fieldId;
-                input.value = 'Sample notes for ' + labelText.replace('*', '').trim() + '. This is a comprehensive note with detailed information.';
+            value = generateSampleValue(fieldId, input);
+            if (value) {
+                input.value = value;
+                fieldsFilledCount++;
             }
-            fieldsFilledCount++;
+        } else {
+            value = generateSampleValue(fieldId, input);
+            if (value !== '') {
+                input.value = value;
+                fieldsFilledCount++;
+            }
         }
     });
     
     console.log('Filled ' + fieldsFilledCount + ' text/number/date/select/textarea fields');
     
-    // Now handle all radio buttons - select the first option for each group
+    // Handle radio buttons
     const radioGroups = {};
     const allRadios = document.querySelectorAll('input[type="radio"]');
     
@@ -469,29 +582,17 @@ function fillSampleData() {
     
     let radioGroupsSelected = 0;
     
-    // Select first radio in each group
     Object.keys(radioGroups).forEach(groupName => {
         if (radioGroups[groupName].length > 0) {
-            // Try to select a meaningful option based on field name
             const fieldName = groupName.toLowerCase();
             
+            // Smart selection based on field name
             if (fieldName.includes('gender') || fieldName.includes('sex')) {
-                // Try to find "male" option
                 const maleOption = radioGroups[groupName].find(r => 
                     r.value.toLowerCase().includes('male') && !r.value.toLowerCase().includes('female')
                 );
                 if (maleOption) {
                     maleOption.checked = true;
-                    radioGroupsSelected++;
-                    return;
-                }
-            } else if (fieldName.includes('yes') || fieldName.includes('no')) {
-                // For yes/no questions, select "yes" (usually index 0 or 1)
-                const yesOption = radioGroups[groupName].find(r => 
-                    r.value.toLowerCase() === 'yes' || r.value.toLowerCase() === 'y'
-                );
-                if (yesOption) {
-                    yesOption.checked = true;
                     radioGroupsSelected++;
                     return;
                 }
@@ -505,7 +606,7 @@ function fillSampleData() {
     
     console.log('Selected radio buttons in ' + radioGroupsSelected + ' groups');
     
-    // Handle all checkboxes - check the first 1-2 options in each group
+    // Handle checkboxes
     const checkboxGroups = {};
     const allCheckboxes = document.querySelectorAll('input[type="checkbox"]');
     
@@ -519,14 +620,12 @@ function fillSampleData() {
     
     let checkboxesChecked = 0;
     
-    // Check first 1-2 checkboxes in each group
     Object.keys(checkboxGroups).forEach(groupName => {
         const checkboxes = checkboxGroups[groupName];
         if (checkboxes.length > 0) {
-            checkboxes[0].checked = true; // Always check first
+            checkboxes[0].checked = true;
             checkboxesChecked++;
             if (checkboxes.length > 2) {
-                // If more than 2 options, also check second one
                 checkboxes[1].checked = true;
                 checkboxesChecked++;
             }
@@ -538,8 +637,7 @@ function fillSampleData() {
     const totalFilled = fieldsFilledCount + radioGroupsSelected + Object.keys(checkboxGroups).length;
     
     if (totalFilled > 0) {
-        showAlert('✅ Sample data loaded! Filled ' + totalFilled + ' fields', 'success');
-        // Scroll to top to see the filled form
+        showAlert('✅ Sample data loaded! Filled ' + totalFilled + ' fields with intelligent values', 'success');
         scrollToTop(500);
     } else {
         showAlert('⚠️ No fields found to fill. Make sure the form is loaded.', 'info');
@@ -585,8 +683,6 @@ document.getElementById('dataForm').addEventListener('submit', async function(e)
         if (response.ok) {
             showAlert('✅ Data Entry added Successfully');
             scrollToTop(800);
-            // Optionally clear form after successful submission
-            // document.getElementById('dataForm').reset();
         } else {
             throw new Error('Failed to save record');
         }
@@ -630,11 +726,10 @@ function renderRecordsTable(records) {
         return;
     }
 
-    // Get all unique field keys from records
     const allKeys = new Set();
     records.forEach(record => {
         Object.keys(record).forEach(key => {
-            if (key !== 'form_data') {  // Exclude the raw JSON field
+            if (key !== 'form_data') {
                 allKeys.add(key);
             }
         });
@@ -642,7 +737,6 @@ function renderRecordsTable(records) {
     
     const fieldKeys = Array.from(allKeys);
 
-    // Create header with field labels
     let headerHTML = '<th>Record ID</th><th>Created At</th><th>Uploaded</th>';
     fieldKeys.forEach(fieldId => {
         if (!['id', 'created_at', 'uploaded_to_s3'].includes(fieldId)) {
@@ -653,7 +747,6 @@ function renderRecordsTable(records) {
     });
     header.innerHTML = headerHTML;
 
-    // Create rows
     let bodyHTML = '';
     records.forEach(record => {
         bodyHTML += `<tr>
@@ -678,24 +771,19 @@ function renderRecordsTable(records) {
     body.innerHTML = bodyHTML;
 }
 
-// Helper function to determine field priority for sorting
 function getFieldPriority(fieldId) {
     const nameFields = ['first_name', 'last_name', 'patient_name', 'full_name', 'name'];
     const identifierFields = ['record_id', 'patient_id', 'id', 'mrn'];
     
-    // Name fields get highest priority (0-9)
     const nameIndex = nameFields.indexOf(fieldId.toLowerCase());
     if (nameIndex !== -1) return nameIndex;
     
-    // Identifier fields get second priority (10-19)
     const idIndex = identifierFields.indexOf(fieldId.toLowerCase());
     if (idIndex !== -1) return 10 + idIndex;
     
-    // All other fields get lower priority
     return 1000;
 }
 
-// Sort fields to prioritize name fields
 function sortFieldsByPriority(fields) {
     return fields.sort((a, b) => {
         const priorityA = getFieldPriority(a.field_id);
@@ -753,7 +841,6 @@ async function buildForm() {
         panel.id = `panel-${categoryKey}`;
         panel.className = `category-panel ${index === 0 ? 'active' : ''}`;
         
-        // Add expand/collapse all buttons
         const controls = document.createElement('div');
         controls.className = 'section-controls';
         controls.innerHTML = `
@@ -766,19 +853,15 @@ async function buildForm() {
         `;
         panel.appendChild(controls);
         
-        // Group fields by section and sort them
         const fieldsBySection = groupFieldsBySection(category.fields);
         
-        // Render each section
         Object.keys(fieldsBySection).forEach((sectionKey, sectionIndex) => {
             const sectionFields = sortFieldsByPriority(fieldsBySection[sectionKey]);
             const sectionId = `${categoryKey}-${sectionKey}`;
             
-            // Create section container
             const sectionDiv = document.createElement('div');
             sectionDiv.className = 'form-section';
             
-            // Section header (collapsible)
             const sectionHeader = document.createElement('div');
             sectionHeader.id = `section-header-${sectionId}`;
             sectionHeader.className = `section-header-small ${sectionIndex > 0 ? 'collapsed' : ''}`;
@@ -792,12 +875,10 @@ async function buildForm() {
             `;
             sectionDiv.appendChild(sectionHeader);
             
-            // Create fields grid
             const fieldsGrid = document.createElement('div');
             fieldsGrid.id = `section-content-${sectionId}`;
             fieldsGrid.className = `form-fields-grid ${sectionIndex === 0 ? 'expanded' : ''}`;
             
-            // Render fields in this section
             sectionFields.forEach(field => {
                 const fieldElement = createFieldElement(field);
                 fieldsGrid.appendChild(fieldElement);
@@ -889,8 +970,6 @@ function createFieldElement(field) {
             input.id = field.field_id;
             input.name = field.field_id;
             input.classList.add("form-control");
-            // Don't use HTML5 required attribute due to collapsible sections
-            // if (field.required) input.required = true;
             if (field.validation) {
                 if (field.validation.min !== undefined) input.min = field.validation.min;
                 if (field.validation.max !== undefined) input.max = field.validation.max;
@@ -904,12 +983,8 @@ function createFieldElement(field) {
             input.id = field.field_id;
             input.name = field.field_id;
             input.classList.add("form-control");
-            // Don't use HTML5 required attribute due to collapsible sections
-            // if (field.required) input.required = true;
             if (field.validation) {
                 if (field.validation.min !== undefined) input.min = field.validation.min;
-                // Remove max validation - allow any number
-                // if (field.validation.max !== undefined) input.max = field.validation.max;
             }
             break;
 
@@ -919,8 +994,6 @@ function createFieldElement(field) {
             input.id = field.field_id;
             input.name = field.field_id;
             input.classList.add("form-control");
-            // Don't use HTML5 required attribute due to collapsible sections
-            // if (field.required) input.required = true;
             break;
 
         case 'textarea':
@@ -929,8 +1002,6 @@ function createFieldElement(field) {
             input.name = field.field_id;
             input.classList.add("form-control");
             input.rows = 3;
-            // Don't use HTML5 required attribute due to collapsible sections
-            // if (field.required) input.required = true;
             break;
 
         case 'select':
@@ -938,8 +1009,6 @@ function createFieldElement(field) {
             input.id = field.field_id;
             input.name = field.field_id;
             input.classList.add("form-control");
-            // Don't use HTML5 required attribute due to collapsible sections
-            // if (field.required) input.required = true;
             
             if (field.options && Array.isArray(field.options)) {
                 if (!field.required) {
@@ -987,8 +1056,6 @@ function createFieldElement(field) {
                     radio.style.margin = "0";
                     radio.style.cursor = "pointer";
                     radio.style.flexShrink = "0";
-                    // Don't use HTML5 required attribute due to collapsible sections
-                    // if (field.required) radio.required = true;
 
                     const radioLabel = document.createElement("span");
                     radioLabel.textContent = option.label;
@@ -1050,8 +1117,6 @@ function createFieldElement(field) {
             input.id = field.field_id;
             input.name = field.field_id;
             input.classList.add("form-control");
-            // Don't use HTML5 required attribute due to collapsible sections
-            // if (field.required) input.required = true;
     }
 
     wrapper.appendChild(label);

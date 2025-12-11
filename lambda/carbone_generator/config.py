@@ -31,10 +31,11 @@ class Config:
     DEFAULT_OUTPUT_FORMAT = 'docx' 
     PRESIGNED_URL_EXPIRATION = 3600  # 1 hour
     
-    # Database Tables
-    REDCAP_TABLES = [
-        'redcap_form_part_1', 'redcap_form_part_2', 'redcap_form_part_3',
-        'redcap_form_part_4', 'redcap_form_part_5', 'redcap_form_part_6',
-        'redcap_form_part_7', 'redcap_form_part_8', 'redcap_form_part_9',
-        'redcap_form_part_10'
+    # Database Tables - Now dynamically discovered, but can specify known tables for validation
+    KNOWN_TABLE_PATTERNS = [
+        'encounters',           # Master table
+        'demographics',         # General info
+        'shoulder_%',          # Shoulder tables (diagnosis, clinical, surgery, etc.)
+        'elbow_%',             # Elbow tables (diagnosis, clinical, surgery, etc.)
+        'general_%'            # Other general tables
     ]

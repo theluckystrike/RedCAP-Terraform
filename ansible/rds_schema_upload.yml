@@ -1,6 +1,6 @@
+---
 - name: Upload and create REDCAP schema tables in RDS
   hosts: redcap
-  become: true
   gather_facts: yes
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -8,29 +8,84 @@
     db_name: "{{ lookup('env', 'TF_DB_NAME') }}"
     db_user: "{{ lookup('env', 'TF_DB_USER') }}"
     db_password: "{{ lookup('env', 'TF_DB_PASS') }}"
-    sql_files:
-      - part_1.sql
-      - part_2.sql
-      - part_3.sql
-      - part_4.sql
-      - part_5.sql
-      - part_6.sql
-      - part_7.sql
-      - part_8.sql
-      - part_9.sql
-      - part_10.sql
+    version_file: "files/version.txt"
+    tmp_sql_dir: "/tmp/redcap_sql"
+    sql_base_dir: "files/sql_schema"
 
   tasks:
+    - name: Check if version.txt exists
+      stat:
+        path: "{{ version_file }}"
+      delegate_to: localhost
+      become: false
+      register: version_file_stat
+
+    - name: Fail if version.txt does not exist
+      fail:
+        msg: "version.txt file not found at {{ version_file }}"
+      when: not version_file_stat.stat.exists
+      delegate_to: localhost
+      become: false
+
+    - name: Read SQL folder version from version.txt
+      slurp:
+        src: "{{ version_file }}"
+      delegate_to: localhost
+      become: false
+      register: version_content
+
+    - name: Parse version number from version.txt
+      set_fact:
+        version_number: "{{ version_content.content | b64decode | trim }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Validate version number is numeric
+      fail:
+        msg: "version.txt must contain a numeric value, found: {{ version_number }}"
+      when: version_number is not match('^[0-9]+$')
+      delegate_to: localhost
+      become: false
+
+    - name: Calculate SQL folder (version)
+      set_fact:
+        sql_folder: "{{ (version_number | int)}}"
+
+    - name: Set SQL files directory path
+      set_fact:
+        sql_files_dir: "{{ sql_base_dir }}/{{ sql_folder }}"
+
+    - name: Display version calculation
+      debug:
+        msg: 
+          - "Version file: {{ version_file }}"
+          - "Version in file: {{ version_number }}"
+          - "Calculated SQL folder: {{ sql_folder }} (version - 1)"
+          - "Full path: {{ sql_files_dir }}"
+
+    - name: Check if SQL folder exists
+      stat:
+        path: "{{ sql_files_dir }}"
+      delegate_to: localhost
+      become: false
+      register: sql_dir_stat
+
+    - name: Fail if SQL folder does not exist
+      fail:
+        msg: "SQL folder not found at {{ sql_files_dir }}. Make sure folder 'sql_files/{{ sql_folder }}' exists."
+      when: not sql_dir_stat.stat.exists
+
     - name: Install PostgreSQL client
       apt:
         name: postgresql-client
         update_cache: yes
         state: present
+      become: true
 
     - name: Test RDS connectivity
       shell: |
         PGPASSWORD="{{ db_password }}" psql \
-          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} " \
+          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
           -c "SELECT version();"
       register: connectivity_test
       failed_when: false
@@ -46,17 +101,105 @@
         msg: "Cannot connect to RDS: {{ connectivity_test.stderr }}"
       when: connectivity_test.rc != 0
 
+    - name: Get list of existing tables
+      shell: |
+        psql "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          -t -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+        PGSSLMODE: "require"
+      register: existing_tables
+      changed_when: false
+      failed_when: false
+
+    - name: Parse table names
+      set_fact:
+        table_list: "{{ existing_tables.stdout_lines | map('trim') | select() | list }}"
+      when: 
+        - existing_tables.rc == 0
+        - existing_tables.stdout_lines is defined
+
+    - name: Display tables to be dropped
+      debug:
+        msg: "Found {{ table_list | default([]) | length }} tables to drop: {{ table_list | default([]) }}"
+      when: 
+        - table_list is defined
+        - table_list | length > 0
+
+    - name: Drop all existing tables (CASCADE)
+      shell: |
+        psql "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          -c "DROP TABLE IF EXISTS \"{{ item }}\" CASCADE;"
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+        PGSSLMODE: "require"
+      loop: "{{ table_list }}"
+      when: 
+        - table_list is defined
+        - table_list | length > 0
+      register: drop_result
+      failed_when: drop_result.rc != 0
+
+    - name: Confirm tables dropped
+      debug:
+        msg: "Successfully dropped {{ table_list | length }} tables"
+      when: 
+        - table_list is defined
+        - table_list | length > 0
+
+    - name: No tables to drop
+      debug:
+        msg: "No existing tables found - starting with clean database"
+      when: 
+        - table_list is not defined or table_list | length == 0
+
+    - name: Create temporary SQL directory on remote host
+      file:
+        path: "{{ tmp_sql_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Find all SQL files in local directory
+      find:
+        paths: "{{ sql_files_dir }}"
+        patterns: "*.sql"
+        recurse: no
+      delegate_to: localhost
+      become: false
+      register: found_sql_files
+
+    - name: Fail if no SQL files found
+      fail:
+        msg: "No SQL files found in {{ sql_files_dir }}"
+      when: found_sql_files.files | length == 0
+
+    - name: Sort SQL files by name
+      set_fact:
+        sorted_sql_files: "{{ found_sql_files.files | sort(attribute='path') }}"
+
+    - name: Display files to be processed
+      debug:
+        msg: 
+          - "Processing SQL files from folder: {{ sql_folder }}"
+          - "Found {{ sorted_sql_files | length }} SQL files"
+          - "Files: {{ sorted_sql_files | map(attribute='path') | map('basename') | list }}"
+
     - name: Upload SQL files to EC2 instance
       copy:
-        src: "sql_files/3/{{ item }}"
-        dest: "/tmp/{{ item }}"
+        src: "{{ item.path }}"
+        dest: "{{ tmp_sql_dir }}/{{ item.path | basename }}"
         mode: '0644'
-      loop: "{{ sql_files }}"
+      loop: "{{ sorted_sql_files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      become: true
 
-    - name: Confirm that SQL file exists before execution
+    - name: Confirm SQL files uploaded
       stat:
-        path: "/tmp/{{ item }}"
-      loop: "{{ sql_files }}"
+        path: "{{ tmp_sql_dir }}/{{ item.path | basename }}"
+      loop: "{{ sorted_sql_files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
       register: file_check
       failed_when: not file_check.stat.exists
 
@@ -65,8 +208,10 @@
         timeout 600s psql \
           "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
           -v ON_ERROR_STOP=1 \
-          -f /tmp/{{ item }}
-      loop: "{{ sql_files }}"
+          -f {{ tmp_sql_dir }}/{{ item.path | basename }}
+      loop: "{{ sorted_sql_files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
       environment:
         PGPASSWORD: "{{ db_password }}"
         PGSSLMODE: "require"
@@ -77,16 +222,18 @@
 
     - name: Show execution result of each SQL file
       debug:
-        msg: "{{ item.stdout_lines | default([]) }}"
+        msg: 
+          - "File: {{ item.item.path | basename }}"
+          - "Status: {{ 'SUCCESS' if item.rc == 0 else 'FAILED' }}"
+          - "Output: {{ item.stdout_lines | default(['No output']) | join('\n') }}"
       loop: "{{ psql_output.results }}"
       loop_control:
-        label: "{{ item.item }}"
-      when: item.rc == 0
+        label: "{{ item.item.path | basename }}"
+      when: item.stdout_lines is defined and item.stdout_lines | length > 0
 
     - name: Verify tables created in PostgreSQL
       shell: |
-        timeout 600s psql \
-          "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+        psql "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
           -c '\dt'
       environment:
         PGPASSWORD: "{{ db_password }}"
@@ -94,12 +241,31 @@
       register: result
       changed_when: false
 
-    - name: Output list of created tables
-      debug:
-        var: result.stdout_lines
+    - name: Count created tables
+      shell: |
+        psql "host={{ db_host }} port=5432 dbname={{ db_name }} user={{ db_user }} sslmode=require" \
+          -t -c "SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public';"
+      environment:
+        PGPASSWORD: "{{ db_password }}"
+        PGSSLMODE: "require"
+      register: table_count
+      changed_when: false
 
-    - name: Clean up SQL files
+    - name: Output summary
+      debug:
+        msg:
+          - "==============================================="
+          - "Version File: {{ version_file }}"
+          - "Version Number: {{ version_number }}"
+          - "SQL Folder Used: {{ sql_folder }} (version - 1)"
+          - "SQL Files Executed: {{ sorted_sql_files | length }}"
+          - "Total Tables Created: {{ table_count.stdout | trim }}"
+          - "==============================================="
+          - "Table List:"
+          - "{{ result.stdout_lines }}"
+
+    - name: Clean up temporary SQL directory
       file:
-        path: "/tmp/{{ item }}"
+        path: "{{ tmp_sql_dir }}"
         state: absent
-      loop: "{{ sql_files }}"
+      become: true

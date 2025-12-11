@@ -80,10 +80,22 @@ def generate_semantic_prefix(category, section_hint=""):
     
     return 'gen'  # Default
 
-def sanitize_column_name(field_id, prefix=""):
+def sanitize_column_name(field_id, prefix="", used_names=None):
     """
     Create clean SQL column name with semantic prefix
+    Handles name collisions by adding numeric suffixes
+    
+    Args:
+        field_id: Original field identifier
+        prefix: Semantic prefix to add
+        used_names: Set of already-used column names to avoid duplicates
+    
+    Returns:
+        Unique column name within the table
     """
+    if used_names is None:
+        used_names = set()
+    
     # Remove existing suffixes like _shoulder, _elbow
     clean_id = re.sub(r'_(shoulder|elbow)$', '', field_id)
     
@@ -100,10 +112,19 @@ def sanitize_column_name(field_id, prefix=""):
             clean = f"{prefix}_{clean}"
     
     # Ensure not too long (PostgreSQL limit 63 chars)
-    if len(clean) > 63:
-        clean = clean[:63]
+    base = clean[:63]
+    final = base
     
-    return clean
+    # Handle collisions by adding numeric suffix
+    counter = 1
+    while final in used_names:
+        suffix = f"_{counter}"
+        # Make room for suffix by truncating base
+        final = base[:63 - len(suffix)] + suffix
+        counter += 1
+    
+    used_names.add(final)
+    return final
 
 def organize_fields_by_section(category_data):
     """
@@ -190,6 +211,15 @@ def split_large_sections(fields, max_fields_per_table=250):
 def generate_table_sql(table_name, fields, category, part_num=None):
     """
     Generate CREATE TABLE SQL for a specific table
+    
+    Args:
+        table_name: Base table name
+        fields: List of field definitions
+        category: Category name (for prefix generation)
+        part_num: Part number if table is split (optional)
+    
+    Returns:
+        SQL CREATE TABLE statement as string
     """
     # Adjust table name for multi-part tables
     if part_num is not None:
@@ -210,6 +240,9 @@ def generate_table_sql(table_name, fields, category, part_num=None):
     # encounter_id foreign key (links all tables)
     sql_lines.append("    encounter_id VARCHAR(100) NOT NULL,")
     
+    # Track used column names to avoid duplicates within this table
+    used_names = {'id', 'encounter_id', 'created_at', 'updated_at'}
+    
     # Add fields
     for field in fields:
         field_id = field['field_id']
@@ -221,8 +254,8 @@ def generate_table_sql(table_name, fields, category, part_num=None):
         # Generate semantic prefix
         prefix = generate_semantic_prefix(category, section_hint)
         
-        # Create column name
-        col_name = sanitize_column_name(field_id, prefix)
+        # Create column name with duplicate detection
+        col_name = sanitize_column_name(field_id, prefix, used_names)
         
         # Map to SQL type
         sql_type = map_field_type_to_sql(field_type, validation)
@@ -236,8 +269,8 @@ def generate_table_sql(table_name, fields, category, part_num=None):
         
         col_def += ","
         
-        # Add comment with original label
-        sql_lines.append(col_def + f"  -- {label[:60]}")
+        # Add comment with original label and field_id for traceability
+        sql_lines.append(col_def + f"  -- {label[:50]} (original: {field_id[:30]})")
     
     # Timestamps (audit trail)
     sql_lines.append("    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,")
@@ -252,13 +285,21 @@ def generate_table_sql(table_name, fields, category, part_num=None):
     sql_lines.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_created ON {table_name}(created_at);")
     sql_lines.append("")
     
-    # Add foreign key constraint
-    sql_lines.append(f"-- Foreign key constraint")
-    sql_lines.append(f"ALTER TABLE {table_name}")
-    sql_lines.append(f"    ADD CONSTRAINT fk_{table_name}_encounter")
-    sql_lines.append(f"    FOREIGN KEY (encounter_id)")
-    sql_lines.append(f"    REFERENCES encounters(encounter_id)")
-    sql_lines.append(f"    ON DELETE CASCADE;")
+    # Add foreign key constraint (idempotent approach)
+    sql_lines.append(f"-- Foreign key constraint (idempotent)")
+    sql_lines.append(f"DO $$")
+    sql_lines.append(f"BEGIN")
+    sql_lines.append(f"    IF NOT EXISTS (")
+    sql_lines.append(f"        SELECT 1 FROM pg_constraint ")
+    sql_lines.append(f"        WHERE conname = 'fk_{table_name}_encounter'")
+    sql_lines.append(f"    ) THEN")
+    sql_lines.append(f"        ALTER TABLE {table_name}")
+    sql_lines.append(f"            ADD CONSTRAINT fk_{table_name}_encounter")
+    sql_lines.append(f"            FOREIGN KEY (encounter_id)")
+    sql_lines.append(f"            REFERENCES encounters(encounter_id)")
+    sql_lines.append(f"            ON DELETE CASCADE;")
+    sql_lines.append(f"    END IF;")
+    sql_lines.append(f"END $$;")
     sql_lines.append("")
     
     return '\n'.join(sql_lines)
@@ -281,12 +322,22 @@ CREATE TABLE IF NOT EXISTS encounters (
     prior_encounter_id VARCHAR(100),  -- Link to previous encounter
     schema_version VARCHAR(20) DEFAULT '1.0',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    CONSTRAINT fk_prior_encounter 
-        FOREIGN KEY (prior_encounter_id) 
-        REFERENCES encounters(encounter_id)
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Self-referencing foreign key (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'fk_prior_encounter'
+    ) THEN
+        ALTER TABLE encounters
+            ADD CONSTRAINT fk_prior_encounter 
+            FOREIGN KEY (prior_encounter_id) 
+            REFERENCES encounters(encounter_id);
+    END IF;
+END $$;
 
 -- Indexes for encounters table
 CREATE INDEX IF NOT EXISTS idx_encounters_patient ON encounters(patient_id);
@@ -420,11 +471,14 @@ def generate_schema_from_json(json_path, output_dir):
                 
                 print(f"        ✓ {filename}")
                 
-                # Track for mapping
+                # Track for mapping - IMPORTANT: Use same logic for column names
                 field_mappings = []
+                used_names_for_mapping = {'id', 'encounter_id', 'created_at', 'updated_at'}
+                
                 for field in chunk:
                     prefix = generate_semantic_prefix(category_key, field.get('section', ''))
-                    col_name = sanitize_column_name(field['field_id'], prefix)
+                    # Use same sanitize function with used_names tracking
+                    col_name = sanitize_column_name(field['field_id'], prefix, used_names_for_mapping)
                     sql_type = map_field_type_to_sql(field['field_type'], field.get('validation'))
                     
                     field_mappings.append({
@@ -455,30 +509,6 @@ def generate_schema_from_json(json_path, output_dir):
     print(f"✓ {mapping_path}")
     print()
     
-    # Generate master SQL file (combines all)
-    print("Generating master SQL file...")
-    master_sql_path = os.path.join(version_dir, 'complete_schema.sql')
-    with open(master_sql_path, 'w', encoding='utf-8') as master:
-        master.write(f"-- Complete Database Schema\n")
-        master.write(f"-- Version: {version}\n")
-        master.write(f"-- Generated: {datetime.now().isoformat()}\n")
-        master.write(f"-- Total Tables: {len(all_tables_info) + 1}\n\n")
-        
-        # Add encounters table
-        master.write(encounters_sql)
-        master.write("\n\n")
-        
-        # Add all other tables
-        for sql_file in sorted(os.listdir(version_dir)):
-            if sql_file.endswith('.sql') and sql_file != 'complete_schema.sql':
-                filepath = os.path.join(version_dir, sql_file)
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    master.write(f.read())
-                    master.write("\n\n")
-    
-    print(f"✓ {master_sql_path}")
-    print()
-    
     # Summary
     print("="*80)
     print("SCHEMA GENERATION COMPLETE")
@@ -490,7 +520,6 @@ def generate_schema_from_json(json_path, output_dir):
     print()
     print("Files Generated:")
     print(f"  • {len(all_tables_info) + 1} individual SQL files")
-    print(f"  • 1 complete_schema.sql (combined)")
     print(f"  • 1 column_mapping.csv (traceability)")
     print("="*80)
     

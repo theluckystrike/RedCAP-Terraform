@@ -1,6 +1,7 @@
 """
 REDCap Data Ingestion Lambda with Automatic Carbone Document Generation
 Processes Excel files and automatically triggers document generation for new records
+WITH SEMANTIC PREFIX SUPPORT - FIXED VERSION
 """
 import os
 import boto3
@@ -18,31 +19,163 @@ if not logger.hasHandlers():
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-def sanitize_and_truncate(name, used_names):
+def generate_semantic_prefix(category, section_hint=""):
     """
-    Clean and truncate column names to PostgreSQL standards.
-    EXACT same logic as schema generation script.
+    Generate semantic prefix based on category and section.
+    MUST MATCH schema generator logic exactly!
     """
-    name = str(name)
-    clean = re.sub(r'\W+', '_', name.strip().lower())
+    category_lower = category.lower()
+    section_lower = section_hint.lower()
+    
+    # Category prefixes
+    if category_lower == 'general' or 'demograph' in category_lower:
+        return 'dem'  # Demographics/General
+    elif category_lower == 'shoulder':
+        # Determine section-specific prefix
+        if 'diagnosis' in section_lower or 'diag' in section_lower:
+            return 'orth_sh_diag'
+        elif 'clinical' in section_lower or 'clin' in section_lower or 'exam' in section_lower:
+            return 'orth_sh_clin'
+        elif 'treatment' in section_lower or 'plan' in section_lower:
+            return 'orth_sh_tp'
+        elif 'surgery' in section_lower or 'surg' in section_lower or 'operation' in section_lower:
+            return 'orth_sh_surg'
+        elif 'prom' in section_lower or 'outcome' in section_lower:
+            return 'orth_sh_proms'
+        else:
+            return 'orth_sh'
+    elif category_lower == 'elbow':
+        # Determine section-specific prefix
+        if 'diagnosis' in section_lower or 'diag' in section_lower:
+            return 'orth_el_diag'
+        elif 'clinical' in section_lower or 'clin' in section_lower or 'exam' in section_lower:
+            return 'orth_el_clin'
+        elif 'treatment' in section_lower or 'plan' in section_lower:
+            return 'orth_el_tp'
+        elif 'surgery' in section_lower or 'surg' in section_lower or 'operation' in section_lower:
+            return 'orth_el_surg'
+        elif 'prom' in section_lower or 'outcome' in section_lower:
+            return 'orth_el_proms'
+        else:
+            return 'orth_el'
+    
+    return 'gen'  # Default
+
+def infer_table_category(table_name):
+    """
+    Infer category from table name to determine correct prefix.
+    
+    Args:
+        table_name: Database table name (e.g., 'demographics', 'shoulder_diagnosis')
+    
+    Returns:
+        Tuple of (category, section) strings
+    """
+    table_lower = table_name.lower()
+    
+    if 'demographic' in table_lower or table_lower == 'demographics':
+        return 'general', ''
+    elif 'shoulder' in table_lower:
+        if 'diagnosis' in table_lower:
+            return 'shoulder', 'diagnosis'
+        elif 'clinical' in table_lower:
+            return 'shoulder', 'clinical'
+        elif 'treatment' in table_lower:
+            return 'shoulder', 'treatment'
+        elif 'surgery' in table_lower:
+            return 'shoulder', 'surgery'
+        elif 'prom' in table_lower:
+            return 'shoulder', 'proms'
+        else:
+            return 'shoulder', ''
+    elif 'elbow' in table_lower:
+        if 'diagnosis' in table_lower:
+            return 'elbow', 'diagnosis'
+        elif 'clinical' in table_lower:
+            return 'elbow', 'clinical'
+        elif 'treatment' in table_lower:
+            return 'elbow', 'treatment'
+        elif 'surgery' in table_lower:
+            return 'elbow', 'surgery'
+        elif 'prom' in table_lower:
+            return 'elbow', 'proms'
+        else:
+            return 'elbow', ''
+    
+    return 'general', ''
+
+def sanitize_column_name_with_prefix(field_id, table_name, used_names=None):
+    """
+    Create clean SQL column name with semantic prefix.
+    MUST MATCH schema generator logic exactly!
+    
+    Args:
+        field_id: Original field identifier from Excel
+        table_name: Database table name to determine prefix
+        used_names: Set of already-used column names to avoid duplicates
+    
+    Returns:
+        Unique column name with appropriate prefix
+    """
+    if used_names is None:
+        used_names = set()
+    
+    # Infer category and section from table name
+    category, section = infer_table_category(table_name)
+    prefix = generate_semantic_prefix(category, section)
+    
+    # Remove existing suffixes like _shoulder, _elbow
+    clean_id = re.sub(r'_(shoulder|elbow)$', '', field_id)
+    
+    # Sanitize
+    clean = re.sub(r'\W+', '_', clean_id.strip().lower())
+    
+    # Remove leading/trailing underscores
+    clean = clean.strip('_')
+    
+    # Add prefix if provided
+    if prefix and not clean.startswith(prefix):
+        # Check if field already has a category prefix to avoid duplication
+        if not (clean.startswith('orth_') or clean.startswith('dem_') or clean.startswith('gen_')):
+            clean = f"{prefix}_{clean}"
+    
+    # Ensure not too long (PostgreSQL limit 63 chars)
     base = clean[:63]
     final = base
-    i = 1
+    
+    # Handle collisions by adding numeric suffix
+    counter = 1
     while final in used_names:
-        suffix = f"_{i}"
+        suffix = f"_{counter}"
+        # Make room for suffix by truncating base
         final = base[:63 - len(suffix)] + suffix
-        i += 1
+        counter += 1
+    
     used_names.add(final)
     return final
 
-def clean_all_column_names(columns):
-    """Clean all column names using the exact same logic as schema generation."""
+def clean_all_column_names_for_table(columns, table_name):
+    """
+    Clean all column names with appropriate prefix for the given table.
+    
+    Args:
+        columns: List of original column names from Excel
+        table_name: Database table name
+    
+    Returns:
+        List of cleaned column names with semantic prefixes
+    """
     used_names = set()
     cleaned_columns = []
+    
     for col in columns:
-        cleaned = sanitize_and_truncate(col, used_names)
+        cleaned = sanitize_column_name_with_prefix(col, table_name, used_names)
         cleaned_columns.append(cleaned)
-    logger.info(f"Cleaned {len(columns)} column names")
+    
+    logger.info(f"✅ Cleaned {len(columns)} column names for table {table_name}")
+    if cleaned_columns:
+        logger.info(f"   Sample: {columns[0]} → {cleaned_columns[0]}")
+    
     return cleaned_columns
 
 def generate_encounter_id(patient_id, processing_date):
@@ -78,19 +211,23 @@ def generate_encounter_id(patient_id, processing_date):
         logger.error(f"Error generating encounter_id: {str(e)}")
         return None
 
-def get_all_redcap_tables(cursor):
-    """Dynamically discover all redcap_form_part_* tables"""
+def get_all_specialty_tables(cursor):
+    """
+    Dynamically discover all specialty tables (excluding encounters table).
+    New naming: demographics, shoulder_diagnosis, shoulder_clinical, elbow_diagnosis, etc.
+    """
     query = """
         SELECT table_name 
         FROM information_schema.tables 
         WHERE table_schema = 'public' 
-          AND table_name LIKE 'redcap_form_part_%'
+          AND table_name != 'encounters'
+          AND table_name NOT IN ('pg_stat_statements', 'pg_buffercache')
         ORDER BY table_name;
     """
     try:
         cursor.execute(query)
         tables = [row[0] for row in cursor.fetchall()]
-        logger.info(f"Found {len(tables)} redcap tables: {tables}")
+        logger.info(f"Found {len(tables)} specialty tables: {tables}")
         return tables
     except Exception as e:
         logger.error(f"Error fetching table list: {str(e)}")
@@ -131,20 +268,122 @@ def prepare_value_for_insert(value, max_length=200):
     
     return value_str
 
-def insert_data_to_table(cursor, conn, table_name, df, table_columns):
+def upsert_encounter_record(cursor, conn, encounter_id, patient_id, processing_date):
     """
-    Insert data into a specific table using only matching columns.
+    Insert or update the encounters table (master record).
+    Returns the encounter's database ID.
+    """
+    try:
+        # Check if encounter already exists
+        cursor.execute(
+            "SELECT id FROM encounters WHERE encounter_id = %s",
+            (encounter_id,)
+        )
+        existing = cursor.fetchone()
+        
+        if existing:
+            logger.info(f"📋 Encounter {encounter_id} already exists (id={existing[0]})")
+            return existing[0]
+        
+        # Insert new encounter
+        insert_query = """
+            INSERT INTO encounters (
+                encounter_id, 
+                patient_id, 
+                processing_date,
+                encounter_date,
+                is_first_visit,
+                schema_version
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """
+        
+        cursor.execute(insert_query, (
+            encounter_id,
+            patient_id,
+            processing_date.date(),
+            processing_date.date(),  # Same as processing date initially
+            True,  # Default to first visit
+            '1.0'
+        ))
+        
+        encounter_db_id = cursor.fetchone()[0]
+        conn.commit()
+        
+        logger.info(f"✅ Created encounter {encounter_id} (id={encounter_db_id})")
+        return encounter_db_id
+        
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"❌ Error upserting encounter: {str(e)}")
+        raise
+
+def insert_data_to_table(cursor, conn, table_name, df_original, table_columns, encounter_id_col='encounter_id'):
+    """
+    Insert data into a specific specialty table using column name matching with semantic prefixes.
+    FIXED: Preserves encounter_id column before cleaning other columns.
     Returns (successful_inserts, inserted_ids)
     """
-    available_columns = [col for col in table_columns if col in df.columns]
+    # Create a copy of the DataFrame to avoid modifying the original
+    df = df_original.copy()
+    
+    # CRITICAL: Save encounter_id BEFORE cleaning column names
+    if encounter_id_col not in df.columns:
+        logger.error(f"❌ encounter_id column not found in original DataFrame!")
+        logger.error(f"   Available columns: {df.columns.tolist()[:20]}")
+        return 0, []
+    
+    encounter_id_values = df[encounter_id_col].copy()
+    logger.info(f"✅ Saved encounter_id column with {len(encounter_id_values)} values")
+    
+    # Clean Excel column names to match database column names (with semantic prefixes)
+    logger.info(f"🔄 Applying semantic prefix mapping for table: {table_name}")
+    original_columns = df.columns.tolist()
+    
+    # Remove encounter_id from columns to be cleaned (it's not in original Excel)
+    columns_to_clean = [col for col in original_columns if col != encounter_id_col]
+    
+    # Clean only the Excel columns (not encounter_id)
+    cleaned_excel_columns = clean_all_column_names_for_table(columns_to_clean, table_name)
+    
+    # Create mapping of cleaned columns
+    column_mapping = {}
+    for orig, clean in zip(columns_to_clean, cleaned_excel_columns):
+        column_mapping[orig] = clean
+    
+    # Rename columns in DataFrame (except encounter_id)
+    df = df.rename(columns=column_mapping)
+    
+    # Add encounter_id back to the DataFrame (unchanged)
+    df['encounter_id'] = encounter_id_values
+    
+    logger.info(f"📊 Column mapping examples for {table_name}:")
+    for orig, clean in list(column_mapping.items())[:5]:
+        logger.info(f"   {orig} → {clean}")
+    logger.info(f"   encounter_id → encounter_id (preserved)")
+    
+    # Filter out system columns
+    system_columns = {'id', 'created_at', 'updated_at', 'encounter_id'}
+    data_columns = [col for col in table_columns if col not in system_columns]
+    
+    # Find matching columns between cleaned Excel and table
+    available_columns = [col for col in data_columns if col in df.columns]
     
     if not available_columns:
         logger.warning(f"⚠️ No matching columns found for {table_name}")
+        logger.warning(f"   Table columns (first 10): {data_columns[:10]}")
+        logger.warning(f"   Excel columns (first 10): {list(df.columns)[:10]}")
         return 0, []
     
-    logger.info(f"📊 Found {len(available_columns)} matching columns for {table_name}")
+    logger.info(f"✅ Found {len(available_columns)} matching columns for {table_name}")
+    logger.info(f"   Sample matches: {available_columns[:10]}{'...' if len(available_columns) > 10 else ''}")
     
-    subset_df = df[available_columns].copy()
+    # Add encounter_id to the list
+    insert_columns = ['encounter_id'] + available_columns
+    
+    # Prepare subset DataFrame with encounter_id first
+    subset_df = df[['encounter_id'] + available_columns].copy()
     
     if subset_df.empty:
         logger.warning(f"⚠️ No data rows to insert into {table_name}")
@@ -152,8 +391,8 @@ def insert_data_to_table(cursor, conn, table_name, df, table_columns):
     
     logger.info(f"📊 Preparing to insert {len(subset_df)} rows into {table_name}")
     
-    placeholders = ', '.join(['%s'] * len(available_columns))
-    column_names = ', '.join([f'"{col}"' for col in available_columns])
+    placeholders = ', '.join(['%s'] * len(insert_columns))
+    column_names = ', '.join([f'"{col}"' for col in insert_columns])
     
     # Add RETURNING clause to capture inserted IDs
     insert_query = f'''
@@ -215,7 +454,7 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
     Args:
         lambda_client: Boto3 Lambda client
         function_name: Name of Carbone Lambda function
-        record_ids: List of record IDs to process
+        record_ids: List of record IDs (encounter_ids) to process
         metadata: Optional metadata about the trigger
     
     Returns:
@@ -303,7 +542,7 @@ def lambda_handler(event, context):
     
     # Tracking variables
     total_inserted = {}
-    all_inserted_ids = []  # Collect all newly inserted record IDs
+    all_encounter_ids = []  # Collect all encounter IDs for Carbone trigger
     files_processed = 0
     carbone_triggered = False
     
@@ -328,12 +567,9 @@ def lambda_handler(event, context):
         df = pd.read_excel(local_path)
         logger.info(f"✅ Excel file loaded: {df.shape[0]} rows × {df.shape[1]} columns")
         
-        # Clean column names
-        logger.info("🧹 Cleaning column names...")
+        # Store original columns for later reference
         original_columns = df.columns.tolist()
-        cleaned_columns = clean_all_column_names(original_columns)
-        df.columns = cleaned_columns
-        logger.info(f"✅ Columns cleaned: {len(df.columns)} columns")
+        logger.info(f"📋 Original columns (first 10): {original_columns[:10]}")
         
         if df.empty:
             logger.warning("⚠️  DataFrame is empty, skipping insert")
@@ -345,15 +581,19 @@ def lambda_handler(event, context):
         logger.info(f"{'─'*70}")
         logger.info(f"📅 Using processing date: {processing_datetime.strftime('%Y-%m-%d')}")
         
-        # Try to find patient_id column
-        patient_id_candidates = ['patient_id', 'patientid', 'mrn', 'medical_record_number', 'patient_number', 'pt_id']
+        # Try to find patient_id column (before cleaning)
+        patient_id_candidates = ['record_id', 'patient_id', 'patientid', 'mrn', 'medical_record_number', 'patient_number', 'pt_id', 'id']
+
         
         patient_id_col = None
         
-        # Find matching patient ID column
+        # Find matching patient ID column (case-insensitive)
         for candidate in patient_id_candidates:
-            if candidate in df.columns:
-                patient_id_col = candidate
+            for col in original_columns:
+                if col.lower() == candidate.lower():
+                    patient_id_col = col
+                    break
+            if patient_id_col:
                 break
         
         if patient_id_col:
@@ -380,7 +620,7 @@ def lambda_handler(event, context):
         else:
             logger.error(f"❌ Could not find patient_id column!")
             logger.error(f"   Searched for: {patient_id_candidates}")
-            logger.error(f"   Available columns: {df.columns.tolist()[:20]}...")
+            logger.error(f"   Available columns: {original_columns[:20]}...")
             logger.warning(f"⚠️  Proceeding without encounter_id generation")
         
         logger.info(f"{'─'*70}")
@@ -402,15 +642,39 @@ def lambda_handler(event, context):
             logger.info("✅ Database connection established")
             cursor = conn.cursor()
             
-            # Discover all redcap tables
+            # ===== INSERT ENCOUNTERS (MASTER RECORDS) =====
             logger.info(f"\n{'─'*70}")
-            logger.info(f"🔍 Discovering redcap tables...")
+            logger.info(f"🏥 INSERTING ENCOUNTER RECORDS")
             logger.info(f"{'─'*70}")
             
-            tables = get_all_redcap_tables(cursor)
+            encounter_db_ids = []
+            valid_rows = df[df['encounter_id'].notna()].copy()
+            
+            for idx, row in valid_rows.iterrows():
+                encounter_id = row['encounter_id']
+                patient_id = row[patient_id_col] if patient_id_col else None
+                
+                try:
+                    encounter_db_id = upsert_encounter_record(
+                        cursor, conn, encounter_id, patient_id, processing_datetime
+                    )
+                    encounter_db_ids.append(encounter_id)
+                except Exception as e:
+                    logger.error(f"❌ Failed to insert encounter {encounter_id}: {str(e)}")
+                    continue
+            
+            logger.info(f"✅ Processed {len(encounter_db_ids)} encounter records")
+            all_encounter_ids.extend(encounter_db_ids)
+            
+            # Discover all specialty tables
+            logger.info(f"\n{'─'*70}")
+            logger.info(f"🔍 Discovering specialty tables...")
+            logger.info(f"{'─'*70}")
+            
+            tables = get_all_specialty_tables(cursor)
             
             if not tables:
-                logger.error("❌ No redcap_form_part_* tables found!")
+                logger.error("❌ No specialty tables found!")
                 raise Exception("No tables found in database")
             
             # Initialize tracking for all tables
@@ -429,20 +693,7 @@ def lambda_handler(event, context):
                 if table_columns:
                     table_schemas[table_name] = table_columns
             
-            # Column distribution analysis
-            logger.info(f"\n{'─'*70}")
-            logger.info(f"📊 COLUMN DISTRIBUTION ANALYSIS")
-            logger.info(f"{'─'*70}")
-            logger.info(f"Total columns in Excel: {len(df.columns)}")
-            logger.info(f"Total tables found: {len(table_schemas)}")
-            
-            df_columns_set = set(df.columns)
-            for table_name, table_cols in table_schemas.items():
-                matching = [col for col in table_cols if col in df_columns_set]
-                logger.info(f"{table_name}: {len(table_cols)} cols, {len(matching)} matching")
-            logger.info(f"{'─'*70}")
-            
-            # Process each table
+            # Process each specialty table
             for table_name in tables:
                 logger.info(f"\n{'─'*70}")
                 logger.info(f"📋 Processing: {table_name}")
@@ -458,14 +709,7 @@ def lambda_handler(event, context):
                     )
                     
                     total_inserted[table_name] += rows_inserted
-                    
-                    # Collect IDs only from first table to avoid duplicates
-                    # (assuming all tables represent the same logical records)
-                    if table_name == tables[0]:
-                        all_inserted_ids.extend(inserted_ids)
-                        logger.info(f"📋 Collected {len(inserted_ids)} record IDs from {table_name}")
-                    
-                    logger.info(f"✅ Completed {table_name}")
+                    logger.info(f"✅ Completed {table_name}: {rows_inserted} rows inserted")
                     
                 except Exception as e:
                     conn.rollback()
@@ -508,19 +752,19 @@ def lambda_handler(event, context):
     
     total_rows = max(total_inserted.values()) if total_inserted.values() else 0
     logger.info(f"\nTotal unique data rows: {total_rows}")
-    logger.info(f"Newly inserted record IDs: {len(all_inserted_ids)}")
+    logger.info(f"Encounter IDs created: {len(all_encounter_ids)}")
     
-    if all_inserted_ids:
-        logger.info(f"Record ID range: {min(all_inserted_ids)} - {max(all_inserted_ids)}")
+    if all_encounter_ids:
+        logger.info(f"Sample encounter IDs: {all_encounter_ids[:5]}")
     
     logger.info(f"{'='*70}")
     
     # ===== TRIGGER CARBONE LAMBDA FOR DOCUMENT GENERATION =====
-    if all_inserted_ids:
+    if all_encounter_ids:
         carbone_triggered = trigger_carbone_lambda(
             lambda_client=lambda_client,
             function_name=CARBONE_LAMBDA_FUNCTION_NAME,
-            record_ids=all_inserted_ids,
+            record_ids=all_encounter_ids,
             metadata={
                 'source_file': key if 'key' in locals() else 'unknown',
                 'total_rows': total_rows,
@@ -542,8 +786,8 @@ def lambda_handler(event, context):
             "insertions": total_inserted,
             "tables": list(total_inserted.keys()),
             "total_rows": total_rows,
-            "inserted_record_count": len(all_inserted_ids),
-            "inserted_ids": all_inserted_ids[:20],  # Return first 20 IDs
+            "encounter_count": len(all_encounter_ids),
+            "encounter_ids": all_encounter_ids[:20],  # Return first 20 IDs
             "carbone_triggered": carbone_triggered,
             "timestamp": processing_datetime.isoformat()
         }, indent=2, default=str)
