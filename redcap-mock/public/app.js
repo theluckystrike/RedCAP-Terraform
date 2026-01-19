@@ -4,7 +4,12 @@ let isFormLoaded = false;
 let isLoadingFields = false;
 let formSchema = null;
 let activeCategory = 'general';
-let columnMappingData = null; // Store column mapping CSV data
+let columnMappingData = null;
+
+// Virtualization state
+let visibilityObserver = null;
+let renderedSections = new Set();
+let sectionFieldsData = new Map();
 
 // Initialize
 function showSection(sectionId) {
@@ -39,6 +44,9 @@ function showCategory(categoryKey) {
         panel.classList.remove('active');
     });
     document.getElementById(`panel-${categoryKey}`).classList.add('active');
+    
+    // Initialize visibility observer for new category
+    initializeVisibilityObserver(categoryKey);
 }
 
 function toggleSection(sectionId) {
@@ -46,7 +54,14 @@ function toggleSection(sectionId) {
     const content = document.getElementById(`section-content-${sectionId}`);
     
     header.classList.toggle('collapsed');
-    content.classList.toggle('expanded');
+    
+    if (content.classList.contains('expanded')) {
+        content.classList.remove('expanded');
+    } else {
+        content.classList.add('expanded');
+        // Render content if expanding for the first time
+        renderSectionContent(sectionId);
+    }
 }
 
 function expandAllSections(categoryKey) {
@@ -55,7 +70,11 @@ function expandAllSections(categoryKey) {
     const contents = panel.querySelectorAll('.form-fields-grid');
     
     headers.forEach(header => header.classList.remove('collapsed'));
-    contents.forEach(content => content.classList.add('expanded'));
+    
+    // Expand but don't render yet - let virtualization handle it
+    contents.forEach((content) => {
+        content.classList.add('expanded');
+    });
 }
 
 function collapseAllSections(categoryKey) {
@@ -65,6 +84,78 @@ function collapseAllSections(categoryKey) {
     
     headers.forEach(header => header.classList.add('collapsed'));
     contents.forEach(content => content.classList.remove('expanded'));
+}
+
+// Initialize Intersection Observer for lazy rendering
+function initializeVisibilityObserver(categoryKey) {
+    // Disconnect existing observer
+    if (visibilityObserver) {
+        visibilityObserver.disconnect();
+    }
+    
+    const options = {
+        root: null,
+        rootMargin: '500px', // Load well in advance
+        threshold: [0, 0.1]
+    };
+    
+    visibilityObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const sectionId = entry.target.dataset.sectionId;
+                
+                // Only render if section is expanded and not already rendered
+                const content = document.getElementById(`section-content-${sectionId}`);
+                if (content && content.classList.contains('expanded')) {
+                    renderSectionContent(sectionId);
+                }
+            }
+        });
+    }, options);
+    
+    // Observe all section containers in the active category
+    const panel = document.getElementById(`panel-${categoryKey}`);
+    if (panel) {
+        const sections = panel.querySelectorAll('.form-section');
+        sections.forEach(section => {
+            const sectionId = section.querySelector('.form-fields-grid').id.replace('section-content-', '');
+            section.dataset.sectionId = sectionId;
+            visibilityObserver.observe(section);
+        });
+    }
+}
+
+// Render section content on demand
+function renderSectionContent(sectionId) {
+    // Skip if already rendered
+    if (renderedSections.has(sectionId)) {
+        return;
+    }
+    
+    const content = document.getElementById(`section-content-${sectionId}`);
+    if (!content) return;
+    
+    // Get fields data from Map
+    const fields = sectionFieldsData.get(sectionId);
+    if (!fields) return;
+    
+    // Clear placeholder
+    content.innerHTML = '';
+    
+    // Render fields in batches for better performance
+    const fragment = document.createDocumentFragment();
+    
+    fields.forEach(field => {
+        const fieldElement = createFieldElement(field);
+        fragment.appendChild(fieldElement);
+    });
+    
+    content.appendChild(fragment);
+    
+    // Mark as rendered
+    renderedSections.add(sectionId);
+    
+    console.log(`✅ Rendered section: ${sectionId} (${fields.length} fields)`);
 }
 
 async function exportToExcel() {
@@ -303,7 +394,6 @@ async function loadFormSchema() {
         currentFields = extractFieldsFromSchema(schema);
         isFormLoaded = true;
         
-        // Also load column mapping
         await loadColumnMapping();
         
         console.log('Extracted fields:', currentFields);
@@ -355,7 +445,6 @@ function scrollToTop(duration = 800) {
     requestAnimationFrame(scrollStep);
 }
 
-// Get field metadata from column mapping
 function getFieldMetadata(fieldId) {
     if (!columnMappingData || !columnMappingData.fields) {
         return null;
@@ -366,7 +455,6 @@ function getFieldMetadata(fieldId) {
     );
 }
 
-// Generate appropriate sample value based on field metadata
 function generateSampleValue(fieldId, inputElement) {
     const metadata = getFieldMetadata(fieldId);
     
@@ -377,9 +465,7 @@ function generateSampleValue(fieldId, inputElement) {
     const dataType = metadata.SQL_Data_Type?.toUpperCase() || '';
     const label = metadata.Label || fieldId;
     
-    // Handle numeric types
     if (dataType.includes('INTEGER') || dataType.includes('NUMERIC') || dataType.includes('DECIMAL')) {
-        // Return actual numbers, not strings
         if (label.toLowerCase().includes('age')) return 45;
         if (label.toLowerCase().includes('height')) return 175;
         if (label.toLowerCase().includes('weight')) return 80;
@@ -390,11 +476,9 @@ function generateSampleValue(fieldId, inputElement) {
         if (label.toLowerCase().includes('count')) return 10;
         if (label.toLowerCase().includes('level')) return 5;
         
-        // Default numeric value
         return Math.floor(Math.random() * 10) + 1;
     }
     
-    // Handle date types
     if (dataType.includes('DATE') || dataType.includes('TIMESTAMP')) {
         const today = new Date();
         if (label.toLowerCase().includes('birth')) {
@@ -404,9 +488,7 @@ function generateSampleValue(fieldId, inputElement) {
         return today.toISOString().split('T')[0];
     }
     
-    // Handle text types
     if (dataType.includes('VARCHAR') || dataType.includes('TEXT')) {
-        // Use semantic filling for known fields
         const fieldLower = fieldId.toLowerCase();
         
         if (fieldLower.includes('record') && fieldLower.includes('id')) {
@@ -440,12 +522,10 @@ function generateSampleValue(fieldId, inputElement) {
             return '10001';
         }
         
-        // For longer text fields, don't use "Sample:" prefix for numeric-type fields
         if (inputElement.tagName === 'TEXTAREA') {
             return generateTextareaSample(label);
         }
         
-        // For regular text fields, return empty instead of "Sample:" for potential numeric fields
         return '';
     }
     
@@ -480,14 +560,12 @@ function generateTextareaSample(label) {
 function generateFallbackValue(fieldId, inputElement) {
     const fieldLower = fieldId.toLowerCase();
     
-    // Numeric fields
     if (inputElement.type === 'number') {
         if (fieldLower.includes('age')) return 45;
         if (fieldLower.includes('pain') || fieldLower.includes('score')) return 7;
         return Math.floor(Math.random() * 10) + 1;
     }
     
-    // Date fields
     if (inputElement.type === 'date') {
         const today = new Date();
         if (fieldLower.includes('birth')) {
@@ -497,7 +575,6 @@ function generateFallbackValue(fieldId, inputElement) {
         return today.toISOString().split('T')[0];
     }
     
-    // Text fields
     if (fieldLower.includes('record') && fieldLower.includes('id')) {
         return 'REC-' + Math.floor(Math.random() * 10000);
     }
@@ -516,145 +593,184 @@ function generateFallbackValue(fieldId, inputElement) {
     return '';
 }
 
-// Improved fill sample data function
+// Fill sample data AND COLLAPSE sections afterward
 async function fillSampleData() {
-    // Ensure column mapping is loaded
     if (!columnMappingData) {
         showAlert('Loading field metadata...', 'info');
         await loadColumnMapping();
     }
     
-    // Expand all sections first
-    const allHeaders = document.querySelectorAll('.section-header-small.collapsed');
-    const allContents = document.querySelectorAll('.form-fields-grid:not(.expanded)');
+    showAlert('🔄 Filling sample data...', 'info');
     
-    allHeaders.forEach(header => header.classList.remove('collapsed'));
-    allContents.forEach(content => content.classList.add('expanded'));
+    // Get all section IDs from current category
+    const activePanel = document.querySelector('.category-panel.active');
+    if (!activePanel) return;
     
-    // Wait for expansion
-    await new Promise(resolve => setTimeout(resolve, 100));
+    const allSections = activePanel.querySelectorAll('.form-fields-grid');
+    const sectionIds = Array.from(allSections).map(section => 
+        section.id.replace('section-content-', '')
+    );
     
-    let fieldsFilledCount = 0;
+    let totalFilled = 0;
     
-    // Fill text/number/date/select/textarea fields
-    const allInputs = document.querySelectorAll('input:not([type="radio"]):not([type="checkbox"]):not([type="submit"]):not([type="button"]), select, textarea');
-    
-    allInputs.forEach(input => {
-        const fieldId = input.id || input.name;
-        if (!fieldId) return;
+    // Process sections progressively with small delays
+    for (let i = 0; i < sectionIds.length; i++) {
+        const sectionId = sectionIds[i];
+        const header = document.getElementById(`section-header-${sectionId}`);
+        const content = document.getElementById(`section-content-${sectionId}`);
         
-        let value = '';
+        if (!header || !content) continue;
         
-        if (input.tagName === 'SELECT') {
-            // Select first non-empty option
-            if (input.options.length > 1) {
-                input.selectedIndex = 1;
-                fieldsFilledCount++;
-            }
-        } else if (input.tagName === 'TEXTAREA') {
-            value = generateSampleValue(fieldId, input);
-            if (value) {
-                input.value = value;
-                fieldsFilledCount++;
-            }
-        } else {
-            value = generateSampleValue(fieldId, input);
-            if (value !== '') {
-                input.value = value;
-                fieldsFilledCount++;
-            }
-        }
-    });
-    
-    console.log('Filled ' + fieldsFilledCount + ' text/number/date/select/textarea fields');
-    
-    // Handle radio buttons
-    const radioGroups = {};
-    const allRadios = document.querySelectorAll('input[type="radio"]');
-    
-    allRadios.forEach(radio => {
-        const groupName = radio.name;
-        if (!radioGroups[groupName]) {
-            radioGroups[groupName] = [];
-        }
-        radioGroups[groupName].push(radio);
-    });
-    
-    let radioGroupsSelected = 0;
-    
-    Object.keys(radioGroups).forEach(groupName => {
-        if (radioGroups[groupName].length > 0) {
-            const fieldName = groupName.toLowerCase();
+        // Expand section temporarily
+        const wasCollapsed = header.classList.contains('collapsed');
+        header.classList.remove('collapsed');
+        content.classList.add('expanded');
+        
+        // Render if not already rendered
+        renderSectionContent(sectionId);
+        
+        // Small delay to allow rendering and prevent blocking
+        await new Promise(resolve => setTimeout(resolve, 5));
+        
+        // Fill fields in this section
+        const sectionInputs = content.querySelectorAll('input:not([type="radio"]):not([type="checkbox"]):not([type="submit"]):not([type="button"]), select, textarea');
+        
+        sectionInputs.forEach(input => {
+            const fieldId = input.id || input.name;
+            if (!fieldId) return;
             
-            // Smart selection based on field name
-            if (fieldName.includes('gender') || fieldName.includes('sex')) {
-                const maleOption = radioGroups[groupName].find(r => 
-                    r.value.toLowerCase().includes('male') && !r.value.toLowerCase().includes('female')
-                );
-                if (maleOption) {
-                    maleOption.checked = true;
-                    radioGroupsSelected++;
-                    return;
+            if (input.tagName === 'SELECT') {
+                if (input.options.length > 1) {
+                    input.selectedIndex = 1;
+                    totalFilled++;
+                }
+            } else if (input.tagName === 'TEXTAREA') {
+                const value = generateSampleValue(fieldId, input);
+                if (value) {
+                    input.value = value;
+                    totalFilled++;
+                }
+            } else {
+                const value = generateSampleValue(fieldId, input);
+                if (value !== '') {
+                    input.value = value;
+                    totalFilled++;
                 }
             }
-            
-            // Default: select first option
-            radioGroups[groupName][0].checked = true;
-            radioGroupsSelected++;
-        }
-    });
-    
-    console.log('Selected radio buttons in ' + radioGroupsSelected + ' groups');
-    
-    // Handle checkboxes
-    const checkboxGroups = {};
-    const allCheckboxes = document.querySelectorAll('input[type="checkbox"]');
-    
-    allCheckboxes.forEach(checkbox => {
-        const groupName = checkbox.name;
-        if (!checkboxGroups[groupName]) {
-            checkboxGroups[groupName] = [];
-        }
-        checkboxGroups[groupName].push(checkbox);
-    });
-    
-    let checkboxesChecked = 0;
-    
-    Object.keys(checkboxGroups).forEach(groupName => {
-        const checkboxes = checkboxGroups[groupName];
-        if (checkboxes.length > 0) {
-            checkboxes[0].checked = true;
-            checkboxesChecked++;
-            if (checkboxes.length > 2) {
-                checkboxes[1].checked = true;
-                checkboxesChecked++;
+        });
+        
+        // Handle radio buttons in this section
+        const radioGroups = {};
+        const sectionRadios = content.querySelectorAll('input[type="radio"]');
+        
+        sectionRadios.forEach(radio => {
+            const groupName = radio.name;
+            if (!radioGroups[groupName]) {
+                radioGroups[groupName] = [];
             }
+            radioGroups[groupName].push(radio);
+        });
+        
+        Object.keys(radioGroups).forEach(groupName => {
+            if (radioGroups[groupName].length > 0) {
+                const fieldName = groupName.toLowerCase();
+                
+                if (fieldName.includes('gender') || fieldName.includes('sex')) {
+                    const maleOption = radioGroups[groupName].find(r => 
+                        r.value.toLowerCase().includes('male') && !r.value.toLowerCase().includes('female')
+                    );
+                    if (maleOption) {
+                        maleOption.checked = true;
+                        totalFilled++;
+                        return;
+                    }
+                }
+                
+                radioGroups[groupName][0].checked = true;
+                totalFilled++;
+            }
+        });
+        
+        // Handle checkboxes in this section
+        const checkboxGroups = {};
+        const sectionCheckboxes = content.querySelectorAll('input[type="checkbox"]');
+        
+        sectionCheckboxes.forEach(checkbox => {
+            const groupName = checkbox.name;
+            if (!checkboxGroups[groupName]) {
+                checkboxGroups[groupName] = [];
+            }
+            checkboxGroups[groupName].push(checkbox);
+        });
+        
+        Object.keys(checkboxGroups).forEach(groupName => {
+            const checkboxes = checkboxGroups[groupName];
+            if (checkboxes.length > 0) {
+                checkboxes[0].checked = true;
+                totalFilled++;
+                if (checkboxes.length > 2) {
+                    checkboxes[1].checked = true;
+                    totalFilled++;
+                }
+            }
+        });
+        
+        // COLLAPSE section after filling (keep only first section expanded)
+        if (i > 0) {
+            header.classList.add('collapsed');
+            content.classList.remove('expanded');
         }
-    });
-    
-    console.log('Checked ' + checkboxesChecked + ' checkboxes');
-    
-    const totalFilled = fieldsFilledCount + radioGroupsSelected + Object.keys(checkboxGroups).length;
-    
-    if (totalFilled > 0) {
-        showAlert('✅ Sample data loaded! Filled ' + totalFilled + ' fields with intelligent values', 'success');
-        scrollToTop(500);
-    } else {
-        showAlert('⚠️ No fields found to fill. Make sure the form is loaded.', 'info');
+        
+        // Update progress every few sections
+        if (i % 10 === 0 || i === sectionIds.length - 1) {
+            const progress = Math.round(((i + 1) / sectionIds.length) * 100);
+            showAlert(`📝 Filling data... ${progress}% complete`, 'info');
+        }
     }
+    
+    showAlert(`✅ Sample data loaded! Filled ${totalFilled} fields. Sections collapsed for easier navigation.`, 'success');
+    scrollToTop(500);
 }
 
 document.getElementById('dataForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     
-    // First, expand all collapsed sections to make all fields accessible
-    const allHeaders = document.querySelectorAll('.section-header-small.collapsed');
-    const allContents = document.querySelectorAll('.form-fields-grid:not(.expanded)');
+    showAlert('🔄 Preparing form submission...', 'info');
     
-    allHeaders.forEach(header => header.classList.remove('collapsed'));
-    allContents.forEach(content => content.classList.add('expanded'));
+    // Get all section IDs from all categories
+    const allPanels = document.querySelectorAll('.category-panel');
+    const allSectionIds = [];
     
-    // Wait a moment for sections to expand
+    allPanels.forEach(panel => {
+        const sections = panel.querySelectorAll('.form-fields-grid');
+        sections.forEach(section => {
+            const sectionId = section.id.replace('section-content-', '');
+            allSectionIds.push(sectionId);
+        });
+    });
+    
+    // Expand and render all sections progressively
+    for (let i = 0; i < allSectionIds.length; i++) {
+        const sectionId = allSectionIds[i];
+        const header = document.getElementById(`section-header-${sectionId}`);
+        const content = document.getElementById(`section-content-${sectionId}`);
+        
+        if (!header || !content) continue;
+        
+        // Expand section
+        header.classList.remove('collapsed');
+        content.classList.add('expanded');
+        
+        // Render if not already rendered
+        renderSectionContent(sectionId);
+        
+        // Small delay for rendering
+        if (i % 20 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+    }
+    
+    // Wait a bit more for final rendering
     await new Promise(resolve => setTimeout(resolve, 100));
     
     const formData = new FormData(e.target);
@@ -682,6 +798,18 @@ document.getElementById('dataForm').addEventListener('submit', async function(e)
         
         if (response.ok) {
             showAlert('✅ Data Entry added Successfully');
+            
+            // Collapse all sections after successful submission
+            allSectionIds.forEach((sectionId, index) => {
+                const header = document.getElementById(`section-header-${sectionId}`);
+                const content = document.getElementById(`section-content-${sectionId}`);
+                
+                if (header && content && index > 0) {
+                    header.classList.add('collapsed');
+                    content.classList.remove('expanded');
+                }
+            });
+            
             scrollToTop(800);
         } else {
             throw new Error('Failed to save record');
@@ -859,6 +987,9 @@ async function buildForm() {
             const sectionFields = sortFieldsByPriority(fieldsBySection[sectionKey]);
             const sectionId = `${categoryKey}-${sectionKey}`;
             
+            // Store fields data in Map for lazy loading
+            sectionFieldsData.set(sectionId, sectionFields);
+            
             const sectionDiv = document.createElement('div');
             sectionDiv.className = 'form-section';
             
@@ -879,10 +1010,12 @@ async function buildForm() {
             fieldsGrid.id = `section-content-${sectionId}`;
             fieldsGrid.className = `form-fields-grid ${sectionIndex === 0 ? 'expanded' : ''}`;
             
-            sectionFields.forEach(field => {
-                const fieldElement = createFieldElement(field);
-                fieldsGrid.appendChild(fieldElement);
-            });
+            // Create empty placeholder - fields will be rendered on-demand
+            fieldsGrid.innerHTML = `
+                <div class="section-placeholder">
+                    <p class="placeholder-text">⏳ ${sectionFields.length} fields ready to load</p>
+                </div>
+            `;
             
             sectionDiv.appendChild(fieldsGrid);
             panel.appendChild(sectionDiv);
@@ -892,6 +1025,13 @@ async function buildForm() {
     });
     
     formContainer.appendChild(panelsDiv);
+    
+    // Initialize visibility observer for the first active category
+    initializeVisibilityObserver(categoryKeys[0]);
+    
+    // Render the first expanded section immediately
+    const firstSectionId = `${categoryKeys[0]}-${Object.keys(groupFieldsBySection(formSchema.categories[categoryKeys[0]].fields))[0]}`;
+    renderSectionContent(firstSectionId);
 }
 
 function groupFieldsBySection(fields) {

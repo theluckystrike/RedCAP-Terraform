@@ -300,6 +300,39 @@ resource "aws_db_proxy" "redcap_proxy" {
   ]
 }
 
+# ===== Column Mapping CSV Configuration =====
+
+resource "aws_s3_object" "column_mapping" {
+  bucket = module.s3.bucket_id
+  key    = "config/column_mapping.csv"
+  source = "${path.module}/config/column_mapping.csv"
+  etag   = filemd5("${path.module}/config/column_mapping.csv")
+
+  # ✅ ADD THESE TWO LINES FOR KMS ENCRYPTION
+  server_side_encryption = var.s3_encryption_type
+  
+
+  tags = merge(
+    var.tags,
+    {
+      Name        = "Column Mapping Configuration"
+      Description = "Excel to RDS column mapping"
+      Purpose     = "Lambda Configuration"
+      Environment = var.environment
+    }
+  )
+}
+
+# Enable versioning on the bucket (if not already enabled)
+# This allows tracking changes to column_mapping.csv
+resource "aws_s3_bucket_versioning" "redcap_exports_versioning" {
+  bucket = module.s3.bucket_id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_db_proxy_default_target_group" "default" {
   db_proxy_name = aws_db_proxy.redcap_proxy.name
 
@@ -394,6 +427,13 @@ module "lambda" {
   s3_bucket_id          = module.s3.bucket_id
   s3_bucket_arn         = module.s3.bucket_arn
 
+  # ✅ NEW: Column Mapping Configuration
+  mapping_bucket        = module.s3.bucket_id
+  mapping_key           = "config/column_mapping.csv"
+  
+  # ✅ NEW: Carbone Lambda Integration
+  carbone_lambda_function_name = var.enable_carbone_lambda ? module.carbone_lambda[0].lambda_function_name : ""
+
   # Optional with defaults
   tags = var.tags
 
@@ -407,10 +447,10 @@ module "lambda" {
     module.rds,
     module.s3,  
     aws_db_proxy.redcap_proxy,
-    aws_secretsmanager_secret.rds_credentials
+    aws_secretsmanager_secret.rds_credentials,
+    aws_s3_object.column_mapping  # ✅ NEW: Wait for CSV upload
   ]
 }
-
 
 
 # ===== CARBONE DOCUMENT GENERATION PIPELINE =====
@@ -896,4 +936,21 @@ output "carbone_setup_commands" {
     connect_ec2     = "aws ssm start-session --target ${module.carbone_ec2[0].carbone_instance_id}"
     check_documents = "aws s3 ls s3://${aws_s3_bucket.carbone_output[0].id}/generated/ --recursive"
   } : null
+}
+
+# ===== Column Mapping Outputs =====
+
+output "column_mapping_s3_path" {
+  description = "S3 path to column_mapping.csv"
+  value       = "s3://${module.s3.bucket_id}/config/column_mapping.csv"
+}
+
+output "lambda_environment_variables" {
+  description = "Lambda environment variables (for verification)"
+  value = {
+    MAPPING_BUCKET               = module.s3.bucket_id
+    MAPPING_KEY                  = "config/column_mapping.csv"
+    CARBONE_LAMBDA_FUNCTION_NAME = var.enable_carbone_lambda ? module.carbone_lambda[0].lambda_function_name : ""
+  }
+  sensitive = false
 }

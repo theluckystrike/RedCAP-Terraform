@@ -153,3 +153,23 @@ variable "s3_trigger_suffix" {
   type        = string
   default     = ".xlsx"
 }
+
+variable "mapping_bucket" {
+  description = "S3 bucket containing column_mapping.csv"
+  type        = string
+  default     = ""
+}
+
+variable "mapping_key" {
+  description = "S3 key path to column_mapping.csv"
+  type        = string
+  default     = "config/column_mapping.csv"
+}
+
+# ===== Carbone Integration =====
+
+variable "carbone_lambda_function_name" {
+  description = "Name of Carbone Lambda function for document generation"
+  type        = string
+  default     = ""
+}

@@ -294,7 +294,7 @@ def create_simplified_template(csv_file_path, output_docx_path):
 
 # Main execution
 if __name__ == "__main__":
-    csv_input = "/Users/ankitgatg/Desktop/RedCAP-Terraform/ansible/files/sql_schema/5/column_mapping.csv"
+    csv_input = "/Users/ankitgatg/Desktop/RedCAP-Terraform/ansible/files/sql_schema/2/column_mapping.csv"
     
     print("="*70)
     print("CARBONE TEMPLATE GENERATOR")

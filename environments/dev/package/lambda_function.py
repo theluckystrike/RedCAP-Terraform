@@ -1,7 +1,7 @@
 """
-REDCap Data Ingestion Lambda with Automatic Carbone Document Generation
-Processes Excel files and automatically triggers document generation for new records
-WITH SEMANTIC PREFIX SUPPORT - FIXED VERSION
+REDCap Data Ingestion Lambda with Column Mapping CSV
+Uses explicit column_mapping.csv for accurate Excel → RDS column mapping
+CORRECTED: Uses proper CSV column names (Table_Name not SQL_Table_Name)
 """
 import os
 import boto3
@@ -12,6 +12,8 @@ import json
 import logging
 import re
 from datetime import datetime
+import csv
+from io import StringIO
 
 logger = logging.getLogger()
 if not logger.hasHandlers():
@@ -19,242 +21,258 @@ if not logger.hasHandlers():
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-def generate_semantic_prefix(category, section_hint=""):
+def load_column_mapping_from_s3(s3_client, bucket_name, csv_key='column_mapping.csv'):
     """
-    Generate semantic prefix based on category and section.
-    MUST MATCH schema generator logic exactly!
-    """
-    category_lower = category.lower()
-    section_lower = section_hint.lower()
+    Load column_mapping.csv from S3 and parse it.
     
-    # Category prefixes
-    if category_lower == 'general' or 'demograph' in category_lower:
-        return 'dem'  # Demographics/General
-    elif category_lower == 'shoulder':
-        # Determine section-specific prefix
-        if 'diagnosis' in section_lower or 'diag' in section_lower:
-            return 'orth_sh_diag'
-        elif 'clinical' in section_lower or 'clin' in section_lower or 'exam' in section_lower:
-            return 'orth_sh_clin'
-        elif 'treatment' in section_lower or 'plan' in section_lower:
-            return 'orth_sh_tp'
-        elif 'surgery' in section_lower or 'surg' in section_lower or 'operation' in section_lower:
-            return 'orth_sh_surg'
-        elif 'prom' in section_lower or 'outcome' in section_lower:
-            return 'orth_sh_proms'
-        else:
-            return 'orth_sh'
-    elif category_lower == 'elbow':
-        # Determine section-specific prefix
-        if 'diagnosis' in section_lower or 'diag' in section_lower:
-            return 'orth_el_diag'
-        elif 'clinical' in section_lower or 'clin' in section_lower or 'exam' in section_lower:
-            return 'orth_el_clin'
-        elif 'treatment' in section_lower or 'plan' in section_lower:
-            return 'orth_el_tp'
-        elif 'surgery' in section_lower or 'surg' in section_lower or 'operation' in section_lower:
-            return 'orth_el_surg'
-        elif 'prom' in section_lower or 'outcome' in section_lower:
-            return 'orth_el_proms'
-        else:
-            return 'orth_el'
-    
-    return 'gen'  # Default
-
-def infer_table_category(table_name):
-    """
-    Infer category from table name to determine correct prefix.
-    
-    Args:
-        table_name: Database table name (e.g., 'demographics', 'shoulder_diagnosis')
+    CSV Format:
+        Original_Field_ID,Category,Section,Table_Name,SQL_Column_Name,SQL_Data_Type,Field_Type,Label
     
     Returns:
-        Tuple of (category, section) strings
+        Dictionary mapping Excel columns to their database metadata
     """
-    table_lower = table_name.lower()
+    logger.info(f"\n{'='*70}")
+    logger.info("📋 LOADING COLUMN MAPPING FROM S3")
+    logger.info(f"{'='*70}")
+    logger.info(f"Bucket: {bucket_name}")
+    logger.info(f"Key: {csv_key}")
     
-    if 'demographic' in table_lower or table_lower == 'demographics':
-        return 'general', ''
-    elif 'shoulder' in table_lower:
-        if 'diagnosis' in table_lower:
-            return 'shoulder', 'diagnosis'
-        elif 'clinical' in table_lower:
-            return 'shoulder', 'clinical'
-        elif 'treatment' in table_lower:
-            return 'shoulder', 'treatment'
-        elif 'surgery' in table_lower:
-            return 'shoulder', 'surgery'
-        elif 'prom' in table_lower:
-            return 'shoulder', 'proms'
-        else:
-            return 'shoulder', ''
-    elif 'elbow' in table_lower:
-        if 'diagnosis' in table_lower:
-            return 'elbow', 'diagnosis'
-        elif 'clinical' in table_lower:
-            return 'elbow', 'clinical'
-        elif 'treatment' in table_lower:
-            return 'elbow', 'treatment'
-        elif 'surgery' in table_lower:
-            return 'elbow', 'surgery'
-        elif 'prom' in table_lower:
-            return 'elbow', 'proms'
-        else:
-            return 'elbow', ''
-    
-    return 'general', ''
-
-def sanitize_column_name_with_prefix(field_id, table_name, used_names=None):
-    """
-    Create clean SQL column name with semantic prefix.
-    MUST MATCH schema generator logic exactly!
-    
-    Args:
-        field_id: Original field identifier from Excel
-        table_name: Database table name to determine prefix
-        used_names: Set of already-used column names to avoid duplicates
-    
-    Returns:
-        Unique column name with appropriate prefix
-    """
-    if used_names is None:
-        used_names = set()
-    
-    # Infer category and section from table name
-    category, section = infer_table_category(table_name)
-    prefix = generate_semantic_prefix(category, section)
-    
-    # Remove existing suffixes like _shoulder, _elbow
-    clean_id = re.sub(r'_(shoulder|elbow)$', '', field_id)
-    
-    # Sanitize
-    clean = re.sub(r'\W+', '_', clean_id.strip().lower())
-    
-    # Remove leading/trailing underscores
-    clean = clean.strip('_')
-    
-    # Add prefix if provided
-    if prefix and not clean.startswith(prefix):
-        # Check if field already has a category prefix to avoid duplication
-        if not (clean.startswith('orth_') or clean.startswith('dem_') or clean.startswith('gen_')):
-            clean = f"{prefix}_{clean}"
-    
-    # Ensure not too long (PostgreSQL limit 63 chars)
-    base = clean[:63]
-    final = base
-    
-    # Handle collisions by adding numeric suffix
-    counter = 1
-    while final in used_names:
-        suffix = f"_{counter}"
-        # Make room for suffix by truncating base
-        final = base[:63 - len(suffix)] + suffix
-        counter += 1
-    
-    used_names.add(final)
-    return final
-
-def clean_all_column_names_for_table(columns, table_name):
-    """
-    Clean all column names with appropriate prefix for the given table.
-    
-    Args:
-        columns: List of original column names from Excel
-        table_name: Database table name
-    
-    Returns:
-        List of cleaned column names with semantic prefixes
-    """
-    used_names = set()
-    cleaned_columns = []
-    
-    for col in columns:
-        cleaned = sanitize_column_name_with_prefix(col, table_name, used_names)
-        cleaned_columns.append(cleaned)
-    
-    logger.info(f"✅ Cleaned {len(columns)} column names for table {table_name}")
-    if cleaned_columns:
-        logger.info(f"   Sample: {columns[0]} → {cleaned_columns[0]}")
-    
-    return cleaned_columns
-
-def generate_encounter_id(patient_id, processing_date):
-    """
-    Generate encounter_id in format: YYYYMMDD_patientID
-    
-    Args:
-        patient_id: Patient identifier
-        processing_date: datetime object for the processing date
-    
-    Returns:
-        String encounter_id or None if patient_id is missing
-    """
     try:
-        # Handle missing patient ID
-        if pd.isna(patient_id):
-            logger.warning(f"Missing patient_id for encounter_id generation")
+        # Download CSV from S3
+        response = s3_client.get_object(Bucket=bucket_name, Key=csv_key)
+        csv_content = response['Body'].read().decode('utf-8')
+        
+        # Parse CSV
+        mapping = {}
+        csv_reader = csv.DictReader(StringIO(csv_content))
+        
+        # Verify headers
+        expected_headers = {'Original_Field_ID', 'Table_Name', 'SQL_Column_Name', 'SQL_Data_Type', 'Label'}
+        actual_headers = set(csv_reader.fieldnames)
+        
+        if not expected_headers.issubset(actual_headers):
+            missing = expected_headers - actual_headers
+            logger.error(f"❌ CSV missing required columns: {missing}")
+            logger.error(f"   Found columns: {actual_headers}")
+            raise ValueError(f"Invalid CSV format. Missing: {missing}")
+        
+        logger.info(f"✅ CSV headers validated: {csv_reader.fieldnames}")
+        
+        for row in csv_reader:
+            # Use Original_Field_ID as the key (lowercase for matching)
+            excel_col = row['Original_Field_ID'].strip().lower()
+            
+            mapping[excel_col] = {
+                'sql_column': row['SQL_Column_Name'].strip(),
+                'sql_table': row['Table_Name'].strip(),  # ✅ CORRECT COLUMN NAME
+                'data_type': row.get('SQL_Data_Type', '').strip(),
+                'label': row.get('Label', '').strip(),
+                'category': row.get('Category', '').strip(),
+                'section': row.get('Section', '').strip(),
+                'field_type': row.get('Field_Type', '').strip()
+            }
+        
+        logger.info(f"✅ Loaded {len(mapping)} column mappings from CSV")
+        
+        # Log sample mappings
+        sample_size = min(5, len(mapping))
+        logger.info(f"\n📋 Sample mappings:")
+        for i, (excel_col, data) in enumerate(list(mapping.items())[:sample_size]):
+            logger.info(f"   {i+1}. '{excel_col}' → '{data['sql_column']}' in {data['sql_table']}")
+        
+        # Group by table for statistics
+        tables = {}
+        for excel_col, data in mapping.items():
+            table_name = data['sql_table']
+            if table_name not in tables:
+                tables[table_name] = []
+            tables[table_name].append(excel_col)
+        
+        logger.info(f"\n📊 Mappings by table:")
+        for table_name in sorted(tables.keys())[:10]:  # Show first 10 tables
+            logger.info(f"   {table_name}: {len(tables[table_name])} columns")
+        
+        if len(tables) > 10:
+            logger.info(f"   ... and {len(tables) - 10} more tables")
+        
+        logger.info(f"{'='*70}\n")
+        
+        return mapping
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load column mapping from S3: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+
+def group_columns_by_table(column_mapping, available_excel_columns):
+    """
+    Group Excel columns by their target database tables.
+    Only includes columns that exist in the Excel file.
+    """
+    logger.info(f"\n{'='*70}")
+    logger.info("🗂️  GROUPING COLUMNS BY TABLE")
+    logger.info(f"{'='*70}")
+    
+    # Normalize available columns to lowercase for matching
+    available_cols_lower = {col.lower(): col for col in available_excel_columns}
+    
+    tables = {}
+    matched_count = 0
+    unmatched_excel = set(available_cols_lower.keys())
+    unmatched_mapping = []
+    
+    for excel_col_lower, mapping_data in column_mapping.items():
+        table_name = mapping_data['sql_table']
+        sql_col = mapping_data['sql_column']
+        
+        # Check if this Excel column exists in the actual data
+        if excel_col_lower in available_cols_lower:
+            original_case_col = available_cols_lower[excel_col_lower]
+            
+            if table_name not in tables:
+                tables[table_name] = []
+            
+            tables[table_name].append((original_case_col, sql_col))
+            matched_count += 1
+            unmatched_excel.discard(excel_col_lower)
+        else:
+            unmatched_mapping.append(excel_col_lower)
+    
+    logger.info(f"✅ Matched {matched_count} Excel columns to database tables")
+    logger.info(f"📊 Grouped into {len(tables)} tables")
+    
+    # Log table summary
+    logger.info(f"\n📋 Columns per table:")
+    for table_name in sorted(tables.keys())[:10]:  # Show first 10
+        logger.info(f"   {table_name}: {len(tables[table_name])} columns")
+    
+    if len(tables) > 10:
+        logger.info(f"   ... and {len(tables) - 10} more tables")
+    
+    # Warn about unmatched columns
+    if unmatched_excel:
+        logger.warning(f"\n⚠️  {len(unmatched_excel)} Excel columns not found in mapping:")
+        for col in list(unmatched_excel)[:10]:
+            logger.warning(f"   - {col}")
+        if len(unmatched_excel) > 10:
+            logger.warning(f"   ... and {len(unmatched_excel) - 10} more")
+    
+    if unmatched_mapping:
+        logger.info(f"\nℹ️  {len(unmatched_mapping)} mapped columns not present in Excel (expected)")
+    
+    logger.info(f"{'='*70}\n")
+    
+    return tables
+
+def validate_data_type(value, expected_type, column_name):
+    """
+    Validate that a value matches the expected SQL data type.
+    
+    Returns:
+        Tuple of (is_valid, cleaned_value, error_message)
+    """
+    # Handle NULL/empty values
+    if pd.isna(value) or value == '' or str(value).strip() == '':
+        return True, None, None
+    
+    try:
+        expected_upper = expected_type.upper()
+        
+        # INTEGER types
+        if 'INTEGER' in expected_upper or 'INT' in expected_upper:
+            if isinstance(value, (int, float)):
+                return True, int(value), None
+            try:
+                int_val = int(float(value))
+                return True, int_val, None
+            except (ValueError, TypeError):
+                return False, value, f"Expected integer, got '{value}'"
+        
+        # NUMERIC/DECIMAL types
+        elif 'NUMERIC' in expected_upper or 'DECIMAL' in expected_upper:
+            if isinstance(value, (int, float)):
+                return True, float(value), None
+            try:
+                float_val = float(value)
+                return True, float_val, None
+            except (ValueError, TypeError):
+                return False, value, f"Expected number, got '{value}'"
+        
+        # VARCHAR/TEXT types
+        elif 'VARCHAR' in expected_upper or 'TEXT' in expected_upper:
+            str_val = str(value).strip()
+            
+            # Check length for VARCHAR
+            if 'VARCHAR' in expected_upper and '(' in expected_type:
+                try:
+                    max_len = int(expected_type.split('(')[1].split(')')[0])
+                    if len(str_val) > max_len:
+                        # Truncate with warning
+                        logger.warning(f"⚠️  Truncating {column_name}: {len(str_val)} > {max_len} chars")
+                        str_val = str_val[:max_len]
+                except:
+                    pass
+            
+            return True, str_val, None
+        
+        # DATE types
+        elif 'DATE' in expected_upper:
+            if isinstance(value, pd.Timestamp):
+                return True, value.date(), None
+            
+            try:
+                date_val = pd.to_datetime(value)
+                return True, date_val.date(), None
+            except:
+                return False, value, f"Invalid date format: '{value}'"
+        
+        # TIMESTAMP types
+        elif 'TIMESTAMP' in expected_upper:
+            if isinstance(value, pd.Timestamp):
+                return True, value, None
+            
+            try:
+                ts_val = pd.to_datetime(value)
+                return True, ts_val, None
+            except:
+                return False, value, f"Invalid timestamp format: '{value}'"
+        
+        # BOOLEAN types
+        elif 'BOOLEAN' in expected_upper or 'BOOL' in expected_upper:
+            if isinstance(value, bool):
+                return True, value, None
+            
+            str_val = str(value).lower().strip()
+            if str_val in ['true', '1', 'yes', 't', 'y']:
+                return True, True, None
+            elif str_val in ['false', '0', 'no', 'f', 'n']:
+                return True, False, None
+            else:
+                return False, value, f"Invalid boolean value: '{value}'"
+        
+        # Default: accept as string
+        else:
+            return True, str(value).strip(), None
+    
+    except Exception as e:
+        return False, value, f"Validation error: {str(e)}"
+
+def prepare_value_for_insert(value, data_type=None, column_name=None):
+    """
+    Prepare a value for PostgreSQL insertion with optional type validation.
+    """
+    # If data type provided, validate
+    if data_type:
+        is_valid, cleaned_value, error_msg = validate_data_type(value, data_type, column_name or 'unknown')
+        
+        if not is_valid:
+            logger.warning(f"⚠️  Validation failed for {column_name}: {error_msg}")
             return None
         
-        # Format date as YYYYMMDD
-        date_str = processing_date.strftime('%Y%m%d')
-        
-        # Clean patient ID (remove whitespace, special chars, convert to string)
-        patient_id_str = str(patient_id).strip().replace(' ', '_')
-        patient_id_str = re.sub(r'[^\w\-]', '_', patient_id_str)
-        
-        # Generate encounter_id
-        encounter_id = f"{date_str}_{patient_id_str}"
-        
-        return encounter_id
-        
-    except Exception as e:
-        logger.error(f"Error generating encounter_id: {str(e)}")
-        return None
-
-def get_all_specialty_tables(cursor):
-    """
-    Dynamically discover all specialty tables (excluding encounters table).
-    New naming: demographics, shoulder_diagnosis, shoulder_clinical, elbow_diagnosis, etc.
-    """
-    query = """
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-          AND table_name != 'encounters'
-          AND table_name NOT IN ('pg_stat_statements', 'pg_buffercache')
-        ORDER BY table_name;
-    """
-    try:
-        cursor.execute(query)
-        tables = [row[0] for row in cursor.fetchall()]
-        logger.info(f"Found {len(tables)} specialty tables: {tables}")
-        return tables
-    except Exception as e:
-        logger.error(f"Error fetching table list: {str(e)}")
-        return []
-
-def get_table_columns_from_db(cursor, table_name):
-    """Fetch column names from the database table in order"""
-    query = """
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name = %s 
-        ORDER BY ordinal_position;
-    """
-    try:
-        cursor.execute(query, (table_name,))
-        columns = [row[0] for row in cursor.fetchall()]
-        logger.info(f"Found {len(columns)} columns in {table_name}")
-        return columns
-    except Exception as e:
-        logger.error(f"Error fetching columns for {table_name}: {str(e)}")
-        return []
-
-def prepare_value_for_insert(value, max_length=200):
-    """
-    Prepare a value for PostgreSQL insertion.
-    Empty strings become NULL to save space.
-    """
+        return cleaned_value
+    
+    # Fallback: basic cleaning
     if pd.isna(value):
         return None
     
@@ -263,10 +281,35 @@ def prepare_value_for_insert(value, max_length=200):
     if not value_str or value_str.lower() in ['nan', 'none', '']:
         return None
     
-    if len(value_str) > max_length:
-        return value_str[:max_length] + "..."
-    
     return value_str
+
+def generate_encounter_id(patient_id, processing_date):
+    """
+    Generate encounter_id in format: YYYYMMDD_patientID
+    """
+    try:
+        if pd.isna(patient_id):
+            logger.warning(f"Missing patient_id for encounter_id generation")
+            return None
+        
+        date_str = processing_date.strftime('%Y%m%d')
+        
+        # Clean patient ID
+        patient_id_str = str(patient_id).strip().replace(' ', '_')
+        patient_id_str = re.sub(r'[^\w\-]', '_', patient_id_str)
+        
+        # Limit length to avoid VARCHAR overflow
+        if len(patient_id_str) > 100:
+            logger.warning(f"⚠️  Patient ID too long ({len(patient_id_str)} chars), truncating to 100")
+            patient_id_str = patient_id_str[:100]
+        
+        encounter_id = f"{date_str}_{patient_id_str}"
+        
+        return encounter_id
+        
+    except Exception as e:
+        logger.error(f"Error generating encounter_id: {str(e)}")
+        return None
 
 def upsert_encounter_record(cursor, conn, encounter_id, patient_id, processing_date):
     """
@@ -303,8 +346,8 @@ def upsert_encounter_record(cursor, conn, encounter_id, patient_id, processing_d
             encounter_id,
             patient_id,
             processing_date.date(),
-            processing_date.date(),  # Same as processing date initially
-            True,  # Default to first visit
+            processing_date.date(),
+            True,
             '1.0'
         ))
         
@@ -319,153 +362,132 @@ def upsert_encounter_record(cursor, conn, encounter_id, patient_id, processing_d
         logger.error(f"❌ Error upserting encounter: {str(e)}")
         raise
 
-def insert_data_to_table(cursor, conn, table_name, df_original, table_columns, encounter_id_col='encounter_id'):
+def insert_data_using_mapping(cursor, conn, df, column_mapping, tables_grouped, encounter_id_col='encounter_id'):
     """
-    Insert data into a specific specialty table using column name matching with semantic prefixes.
-    FIXED: Preserves encounter_id column before cleaning other columns.
-    Returns (successful_inserts, inserted_ids)
+    Insert data into all tables using explicit column mapping from CSV.
     """
-    # Create a copy of the DataFrame to avoid modifying the original
-    df = df_original.copy()
-    
-    # CRITICAL: Save encounter_id BEFORE cleaning column names
     if encounter_id_col not in df.columns:
-        logger.error(f"❌ encounter_id column not found in original DataFrame!")
-        logger.error(f"   Available columns: {df.columns.tolist()[:20]}")
-        return 0, []
+        logger.error(f"❌ encounter_id column not found in DataFrame!")
+        return {}
     
-    encounter_id_values = df[encounter_id_col].copy()
-    logger.info(f"✅ Saved encounter_id column with {len(encounter_id_values)} values")
+    results = {}
     
-    # Clean Excel column names to match database column names (with semantic prefixes)
-    logger.info(f"🔄 Applying semantic prefix mapping for table: {table_name}")
-    original_columns = df.columns.tolist()
-    
-    # Remove encounter_id from columns to be cleaned (it's not in original Excel)
-    columns_to_clean = [col for col in original_columns if col != encounter_id_col]
-    
-    # Clean only the Excel columns (not encounter_id)
-    cleaned_excel_columns = clean_all_column_names_for_table(columns_to_clean, table_name)
-    
-    # Create mapping of cleaned columns
-    column_mapping = {}
-    for orig, clean in zip(columns_to_clean, cleaned_excel_columns):
-        column_mapping[orig] = clean
-    
-    # Rename columns in DataFrame (except encounter_id)
-    df = df.rename(columns=column_mapping)
-    
-    # Add encounter_id back to the DataFrame (unchanged)
-    df['encounter_id'] = encounter_id_values
-    
-    logger.info(f"📊 Column mapping examples for {table_name}:")
-    for orig, clean in list(column_mapping.items())[:5]:
-        logger.info(f"   {orig} → {clean}")
-    logger.info(f"   encounter_id → encounter_id (preserved)")
-    
-    # Filter out system columns
-    system_columns = {'id', 'created_at', 'updated_at', 'encounter_id'}
-    data_columns = [col for col in table_columns if col not in system_columns]
-    
-    # Find matching columns between cleaned Excel and table
-    available_columns = [col for col in data_columns if col in df.columns]
-    
-    if not available_columns:
-        logger.warning(f"⚠️ No matching columns found for {table_name}")
-        logger.warning(f"   Table columns (first 10): {data_columns[:10]}")
-        logger.warning(f"   Excel columns (first 10): {list(df.columns)[:10]}")
-        return 0, []
-    
-    logger.info(f"✅ Found {len(available_columns)} matching columns for {table_name}")
-    logger.info(f"   Sample matches: {available_columns[:10]}{'...' if len(available_columns) > 10 else ''}")
-    
-    # Add encounter_id to the list
-    insert_columns = ['encounter_id'] + available_columns
-    
-    # Prepare subset DataFrame with encounter_id first
-    subset_df = df[['encounter_id'] + available_columns].copy()
-    
-    if subset_df.empty:
-        logger.warning(f"⚠️ No data rows to insert into {table_name}")
-        return 0, []
-    
-    logger.info(f"📊 Preparing to insert {len(subset_df)} rows into {table_name}")
-    
-    placeholders = ', '.join(['%s'] * len(insert_columns))
-    column_names = ', '.join([f'"{col}"' for col in insert_columns])
-    
-    # Add RETURNING clause to capture inserted IDs
-    insert_query = f'''
-        INSERT INTO {table_name} ({column_names})
-        VALUES ({placeholders})
-        RETURNING id
-    '''
-    
-    successful_inserts = 0
-    failed_rows = []
-    inserted_ids = []
-    
-    for idx, row in subset_df.iterrows():
+    # Process each table
+    for table_name, column_pairs in tables_grouped.items():
+        logger.info(f"\n{'─'*70}")
+        logger.info(f"📋 Processing table: {table_name}")
+        logger.info(f"{'─'*70}")
+        logger.info(f"Columns to insert: {len(column_pairs)}")
+        
+        if not column_pairs:
+            logger.warning(f"⚠️  No columns mapped for {table_name}, skipping")
+            continue
+        
         try:
-            prepared_values = tuple(
-                prepare_value_for_insert(val, max_length=200) 
-                for val in row.values
-            )
+            # Build column lists for INSERT
+            excel_cols = [pair[0] for pair in column_pairs]
+            sql_cols = [pair[1] for pair in column_pairs]
             
-            cursor.execute(insert_query, prepared_values)
+            # Check which Excel columns exist in DataFrame
+            available_excel_cols = [col for col in excel_cols if col in df.columns]
             
-            # Capture the inserted ID
-            result = cursor.fetchone()
-            if result:
-                inserted_id = result[0]
-                inserted_ids.append(inserted_id)
+            if not available_excel_cols:
+                logger.warning(f"⚠️  None of the mapped columns exist in Excel data, skipping {table_name}")
+                continue
             
-            conn.commit()
-            successful_inserts += 1
+            # Map available Excel columns to their SQL equivalents
+            excel_to_sql = {}
+            for excel_col, sql_col in column_pairs:
+                if excel_col in df.columns:
+                    excel_to_sql[excel_col] = sql_col
             
-            if (successful_inserts) % 50 == 0:
-                logger.info(f"  Progress: {successful_inserts}/{len(subset_df)} rows inserted...")
+            # Build INSERT statement
+            sql_columns_final = ['encounter_id'] + list(excel_to_sql.values())
+            columns_str = ', '.join([f'"{col}"' for col in sql_columns_final])
+            placeholders = ', '.join(['%s'] * len(sql_columns_final))
+            
+            insert_query = f"""
+                INSERT INTO {table_name} ({columns_str})
+                VALUES ({placeholders})
+                RETURNING id
+            """
+            
+            logger.info(f"📝 INSERT into {table_name} with {len(sql_columns_final)} columns")
+            logger.info(f"   Sample SQL columns: {sql_columns_final[:5]}")
+            
+            # Insert each row
+            rows_inserted = 0
+            rows_failed = 0
+            inserted_ids = []
+            
+            for idx, row in df.iterrows():
+                try:
+                    # Start with encounter_id
+                    values = [row[encounter_id_col]]
+                    
+                    # Add data values with type validation
+                    for excel_col, sql_col in excel_to_sql.items():
+                        raw_value = row[excel_col]
+                        
+                        # Get data type from mapping for validation
+                        excel_col_lower = excel_col.lower()
+                        data_type = column_mapping.get(excel_col_lower, {}).get('data_type', None)
+                        
+                        # Prepare and validate value
+                        cleaned_value = prepare_value_for_insert(
+                            raw_value, 
+                            data_type=data_type,
+                            column_name=excel_col
+                        )
+                        
+                        values.append(cleaned_value)
+                    
+                    # Execute INSERT
+                    cursor.execute(insert_query, tuple(values))
+                    
+                    # Get inserted ID
+                    result = cursor.fetchone()
+                    if result:
+                        inserted_ids.append(result[0])
+                    
+                    conn.commit()
+                    rows_inserted += 1
+                    
+                    if rows_inserted % 50 == 0:
+                        logger.info(f"  Progress: {rows_inserted}/{len(df)} rows inserted...")
                 
-        except psycopg2.Error as row_error:
+                except psycopg2.Error as row_error:
+                    conn.rollback()
+                    logger.warning(f"  ❌ Row {idx} failed: {str(row_error)[:200]}")
+                    rows_failed += 1
+                    continue
+            
+            logger.info(f"✅ Inserted {rows_inserted}/{len(df)} rows into {table_name}")
+            
+            if inserted_ids:
+                logger.info(f"📋 Inserted IDs: {inserted_ids[:10]}{'...' if len(inserted_ids) > 10 else ''}")
+            
+            if rows_failed > 0:
+                logger.warning(f"⚠️  {rows_failed} rows failed to insert")
+            
+            results[table_name] = rows_inserted
+            
+        except Exception as table_error:
             conn.rollback()
-            error_msg = str(row_error)
-            
-            if "row is too big" in error_msg.lower():
-                logger.error(f"  ❌ Row {idx} still too big even with {len(available_columns)} columns!")
-                logger.error(f"     This table needs to be split further in the schema.")
-                failed_rows.append(idx)
-            
-            logger.warning(f"  ❌ Row {idx} failed: {error_msg[:150]}")
+            logger.error(f"❌ Error processing table {table_name}: {str(table_error)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            results[table_name] = 0
             continue
     
-    logger.info(f"✅ Inserted {successful_inserts}/{len(subset_df)} rows into {table_name}")
-    if inserted_ids:
-        logger.info(f"📋 Inserted IDs: {inserted_ids[:10]}{'...' if len(inserted_ids) > 10 else ''} (total: {len(inserted_ids)})")
-    
-    if failed_rows:
-        logger.warning(f"⚠️ Failed to insert {len(failed_rows)} rows: {failed_rows[:5]}")
-    
-    return successful_inserts, inserted_ids
+    return results
 
 def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=None):
     """
     Trigger Carbone Lambda to generate documents for newly inserted records.
-    
-    Args:
-        lambda_client: Boto3 Lambda client
-        function_name: Name of Carbone Lambda function
-        record_ids: List of record IDs (encounter_ids) to process
-        metadata: Optional metadata about the trigger
-    
-    Returns:
-        Boolean indicating success
     """
-    if not record_ids:
-        logger.warning("⚠️ No record IDs provided - skipping Carbone trigger")
-        return False
-    
-    if not function_name:
-        logger.warning("⚠️ Carbone Lambda function name not configured")
+    if not record_ids or not function_name:
+        logger.warning("⚠️  Cannot trigger Carbone Lambda - missing record IDs or function name")
         return False
     
     logger.info(f"\n{'='*70}")
@@ -473,11 +495,10 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
     logger.info(f"{'='*70}")
     
     try:
-        logger.info(f"📋 Record IDs to process: {record_ids[:10]}{'...' if len(record_ids) > 10 else ''}")
+        logger.info(f"📋 Record IDs: {record_ids[:10]}{'...' if len(record_ids) > 10 else ''}")
         logger.info(f"📊 Total records: {len(record_ids)}")
-        logger.info(f"🎯 Target function: {function_name}")
+        logger.info(f"🎯 Function: {function_name}")
         
-        # Prepare payload for Carbone Lambda
         carbone_payload = {
             'record_ids': record_ids,
             'template_name': 'patient_report.docx',
@@ -487,15 +508,14 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
             'metadata': metadata or {}
         }
         
-        # Invoke Carbone Lambda asynchronously
         response = lambda_client.invoke(
             FunctionName=function_name,
-            InvocationType='Event',  # Asynchronous invocation
+            InvocationType='Event',
             Payload=json.dumps(carbone_payload)
         )
         
-        logger.info(f"✅ Carbone Lambda triggered successfully")
-        logger.info(f"   Status Code: {response['StatusCode']}")
+        logger.info(f"✅ Carbone Lambda triggered")
+        logger.info(f"   Status: {response['StatusCode']}")
         logger.info(f"   Request ID: {response['ResponseMetadata']['RequestId']}")
         logger.info(f"{'='*70}")
         
@@ -503,48 +523,50 @@ def trigger_carbone_lambda(lambda_client, function_name, record_ids, metadata=No
         
     except Exception as e:
         logger.error(f"❌ Failed to trigger Carbone Lambda: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
         return False
 
 def lambda_handler(event, context):
     """
-    Main Lambda handler for data ingestion with automatic Carbone triggering.
-    Processes Excel files from S3, inserts data into RDS PostgreSQL,
-    and automatically triggers document generation for new records.
+    Main Lambda handler using column_mapping.csv for explicit field mapping.
     """
-    # Capture processing timestamp at the start
     processing_datetime = datetime.now()
     
-    logger.info("🚀 Lambda function started")
+    logger.info("🚀 Lambda function started (column_mapping.csv mode)")
     logger.info(f"Request ID: {context.aws_request_id if context else 'LOCAL'}")
     logger.info(f"Processing Timestamp: {processing_datetime.isoformat()}")
-    logger.info(f"Processing Date (for encounter_id): {processing_datetime.strftime('%Y%m%d')}")
     
     # Environment variables
     DB_NAME = os.environ['DB_NAME']
     DB_PROXY_ENDPOINT = os.environ['DB_PROXY_ENDPOINT']
     SECRET_ARN = os.environ['SECRET_ARN']
+    MAPPING_BUCKET = os.environ.get('MAPPING_BUCKET', os.environ.get('BUCKET_NAME'))
+    MAPPING_KEY = os.environ.get('MAPPING_KEY', 'config/column_mapping.csv')
     CARBONE_LAMBDA_FUNCTION_NAME = os.environ.get('CARBONE_LAMBDA_FUNCTION_NAME', '')
     
     # Fetch database credentials
-    logger.info("🔐 Fetching database credentials from Secrets Manager...")
+    logger.info("🔐 Fetching database credentials...")
     secrets_client = boto3.client('secretsmanager')
     secret = secrets_client.get_secret_value(SecretId=SECRET_ARN)
     creds = json.loads(secret['SecretString'])
     DB_USER = creds['username']
     DB_PASSWORD = creds['password']
-    logger.info("✅ Credentials retrieved successfully")
+    logger.info("✅ Credentials retrieved")
     
     # Initialize AWS clients
     s3 = boto3.client('s3')
     lambda_client = boto3.client('lambda')
     
+    # Load column mapping from S3
+    try:
+        column_mapping = load_column_mapping_from_s3(s3, MAPPING_BUCKET, MAPPING_KEY)
+    except Exception as e:
+        logger.error(f"❌ Failed to load column mapping: {str(e)}")
+        raise
+    
     # Tracking variables
     total_inserted = {}
-    all_encounter_ids = []  # Collect all encounter IDs for Carbone trigger
+    all_encounter_ids = []
     files_processed = 0
-    carbone_triggered = False
     
     # Process each S3 event record
     for record in event['Records']:
@@ -554,40 +576,35 @@ def lambda_handler(event, context):
         
         logger.info(f"\n{'='*70}")
         logger.info(f"📥 Processing file: {key}")
-        logger.info(f"   Bucket: {bucket}")
         logger.info(f"{'='*70}")
         
-        # Download file from S3
-        logger.info("⬇️  Downloading file from S3...")
+        # Download and read Excel
+        logger.info("⬇️  Downloading from S3...")
         s3.download_file(bucket, key, local_path)
-        logger.info("✅ Download complete")
         
-        # Read Excel file
-        logger.info("📖 Reading Excel file...")
+        logger.info("📖 Reading Excel...")
         df = pd.read_excel(local_path)
-        logger.info(f"✅ Excel file loaded: {df.shape[0]} rows × {df.shape[1]} columns")
-        
-        # Store original columns for later reference
-        original_columns = df.columns.tolist()
-        logger.info(f"📋 Original columns (first 10): {original_columns[:10]}")
+        logger.info(f"✅ Loaded: {df.shape[0]} rows × {df.shape[1]} columns")
         
         if df.empty:
-            logger.warning("⚠️  DataFrame is empty, skipping insert")
+            logger.warning("⚠️  Empty DataFrame, skipping")
             continue
         
-        # ===== GENERATE ENCOUNTER_ID =====
+        # Log original columns
+        original_columns = df.columns.tolist()
+        logger.info(f"📋 Excel columns (first 10): {original_columns[:10]}")
+        
+        # Generate encounter_id
         logger.info(f"\n{'─'*70}")
         logger.info("🆔 GENERATING ENCOUNTER IDs")
         logger.info(f"{'─'*70}")
-        logger.info(f"📅 Using processing date: {processing_datetime.strftime('%Y-%m-%d')}")
         
-        # Try to find patient_id column (before cleaning)
-        patient_id_candidates = ['record_id', 'patient_id', 'patientid', 'mrn', 'medical_record_number', 'patient_number', 'pt_id', 'id']
-
+        patient_id_candidates = [
+            'record_id', 'patient_id', 'patientid', 
+            'mrn', 'medical_record_number', 'patient_number'
+        ]
         
         patient_id_col = None
-        
-        # Find matching patient ID column (case-insensitive)
         for candidate in patient_id_candidates:
             for col in original_columns:
                 if col.lower() == candidate.lower():
@@ -597,36 +614,24 @@ def lambda_handler(event, context):
                 break
         
         if patient_id_col:
-            logger.info(f"✅ Found patient_id column: {patient_id_col}")
+            logger.info(f"✅ Using patient_id column: {patient_id_col}")
             
-            # Generate encounter_id for each row using current processing date
             df['encounter_id'] = df[patient_id_col].apply(
                 lambda pid: generate_encounter_id(pid, processing_datetime)
             )
             
-            # Log statistics
-            total_rows = len(df)
-            valid_encounter_ids = df['encounter_id'].notna().sum()
-            logger.info(f"📊 Generated {valid_encounter_ids}/{total_rows} encounter IDs")
+            valid_count = df['encounter_id'].notna().sum()
+            logger.info(f"📊 Generated {valid_count}/{len(df)} encounter IDs")
             
-            if valid_encounter_ids < total_rows:
-                missing_count = total_rows - valid_encounter_ids
-                logger.warning(f"⚠️  {missing_count} rows missing encounter_id (likely null patient_id)")
-            
-            # Show sample encounter_ids
-            sample_ids = df['encounter_id'].dropna().head(5).tolist()
-            logger.info(f"📋 Sample encounter_ids: {sample_ids}")
-            
+            sample_ids = df['encounter_id'].dropna().head(3).tolist()
+            logger.info(f"📋 Sample: {sample_ids}")
         else:
-            logger.error(f"❌ Could not find patient_id column!")
-            logger.error(f"   Searched for: {patient_id_candidates}")
-            logger.error(f"   Available columns: {original_columns[:20]}...")
-            logger.warning(f"⚠️  Proceeding without encounter_id generation")
-        
-        logger.info(f"{'─'*70}")
+            logger.error(f"❌ No patient_id column found!")
+            logger.error(f"   Searched: {patient_id_candidates}")
+            continue
         
         # Connect to database
-        logger.info(f"🔌 Connecting to database...")
+        logger.info(f"\n🔌 Connecting to database...")
         conn = None
         cursor = None
         
@@ -639,84 +644,45 @@ def lambda_handler(event, context):
                 port=5432,
                 connect_timeout=10
             )
-            logger.info("✅ Database connection established")
+            logger.info("✅ Connected")
             cursor = conn.cursor()
             
-            # ===== INSERT ENCOUNTERS (MASTER RECORDS) =====
+            # Insert encounters
             logger.info(f"\n{'─'*70}")
-            logger.info(f"🏥 INSERTING ENCOUNTER RECORDS")
+            logger.info(f"🏥 INSERTING ENCOUNTERS")
             logger.info(f"{'─'*70}")
             
-            encounter_db_ids = []
+            encounter_ids = []
             valid_rows = df[df['encounter_id'].notna()].copy()
             
             for idx, row in valid_rows.iterrows():
                 encounter_id = row['encounter_id']
-                patient_id = row[patient_id_col] if patient_id_col else None
+                patient_id = row[patient_id_col]
                 
                 try:
-                    encounter_db_id = upsert_encounter_record(
-                        cursor, conn, encounter_id, patient_id, processing_datetime
-                    )
-                    encounter_db_ids.append(encounter_id)
+                    upsert_encounter_record(cursor, conn, encounter_id, patient_id, processing_datetime)
+                    encounter_ids.append(encounter_id)
                 except Exception as e:
-                    logger.error(f"❌ Failed to insert encounter {encounter_id}: {str(e)}")
-                    continue
+                    logger.error(f"❌ Failed: {encounter_id}: {str(e)}")
             
-            logger.info(f"✅ Processed {len(encounter_db_ids)} encounter records")
-            all_encounter_ids.extend(encounter_db_ids)
+            logger.info(f"✅ Processed {len(encounter_ids)} encounters")
+            all_encounter_ids.extend(encounter_ids)
             
-            # Discover all specialty tables
+            # Group columns by table using mapping
+            tables_grouped = group_columns_by_table(column_mapping, df.columns.tolist())
+            
+            # Insert data using mapping
             logger.info(f"\n{'─'*70}")
-            logger.info(f"🔍 Discovering specialty tables...")
+            logger.info(f"💾 INSERTING DATA TO SPECIALTY TABLES")
             logger.info(f"{'─'*70}")
             
-            tables = get_all_specialty_tables(cursor)
+            insertion_results = insert_data_using_mapping(
+                cursor, conn, df, column_mapping, tables_grouped
+            )
             
-            if not tables:
-                logger.error("❌ No specialty tables found!")
-                raise Exception("No tables found in database")
-            
-            # Initialize tracking for all tables
-            for table in tables:
-                total_inserted[table] = 0
-            
-            # Fetch all table schemas
-            logger.info(f"\n{'─'*70}")
-            logger.info(f"📋 Fetching table schemas...")
-            logger.info(f"{'─'*70}")
-            
-            table_schemas = {}
-            for table_name in tables:
-                logger.info(f"🔍 Fetching schema for {table_name}...")
-                table_columns = get_table_columns_from_db(cursor, table_name)
-                if table_columns:
-                    table_schemas[table_name] = table_columns
-            
-            # Process each specialty table
-            for table_name in tables:
-                logger.info(f"\n{'─'*70}")
-                logger.info(f"📋 Processing: {table_name}")
-                logger.info(f"{'─'*70}")
-                
-                if table_name not in table_schemas:
-                    logger.warning(f"⚠️  Skipping {table_name} - no schema")
-                    continue
-                
-                try:
-                    rows_inserted, inserted_ids = insert_data_to_table(
-                        cursor, conn, table_name, df, table_schemas[table_name]
-                    )
-                    
-                    total_inserted[table_name] += rows_inserted
-                    logger.info(f"✅ Completed {table_name}: {rows_inserted} rows inserted")
-                    
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"❌ Error processing {table_name}: {str(e)}")
-                    import traceback
-                    logger.error(f"   Traceback:\n{traceback.format_exc()}")
-                    continue
+            # Merge results
+            for table, count in insertion_results.items():
+                total_inserted[table] = total_inserted.get(table, 0) + count
             
             files_processed += 1
             
@@ -725,7 +691,7 @@ def lambda_handler(event, context):
                 conn.rollback()
             logger.error(f"❌ Database error: {str(e)}")
             import traceback
-            logger.error(f"Traceback:\n{traceback.format_exc()}")
+            logger.error(traceback.format_exc())
             raise
             
         finally:
@@ -733,61 +699,41 @@ def lambda_handler(event, context):
                 cursor.close()
             if conn:
                 conn.close()
-            logger.info("🔌 Database connection closed")
+            logger.info("🔌 Connection closed")
         
-        # Cleanup temporary file
+        # Cleanup
         if os.path.exists(local_path):
             os.remove(local_path)
-            logger.info(f"🗑️  Temporary file removed")
     
-    # ===== FINAL SUMMARY =====
+    # Summary
     logger.info(f"\n{'='*70}")
     logger.info("📊 INSERTION SUMMARY")
     logger.info(f"{'='*70}")
-    logger.info(f"Processing Date: {processing_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Files processed: {files_processed}")
     
     for table, count in sorted(total_inserted.items()):
         logger.info(f"  • {table}: {count} rows")
     
-    total_rows = max(total_inserted.values()) if total_inserted.values() else 0
-    logger.info(f"\nTotal unique data rows: {total_rows}")
-    logger.info(f"Encounter IDs created: {len(all_encounter_ids)}")
-    
-    if all_encounter_ids:
-        logger.info(f"Sample encounter IDs: {all_encounter_ids[:5]}")
-    
+    logger.info(f"\nTotal encounters: {len(all_encounter_ids)}")
     logger.info(f"{'='*70}")
     
-    # ===== TRIGGER CARBONE LAMBDA FOR DOCUMENT GENERATION =====
+    # Trigger Carbone
+    carbone_triggered = False
     if all_encounter_ids:
         carbone_triggered = trigger_carbone_lambda(
-            lambda_client=lambda_client,
-            function_name=CARBONE_LAMBDA_FUNCTION_NAME,
-            record_ids=all_encounter_ids,
-            metadata={
-                'source_file': key if 'key' in locals() else 'unknown',
-                'total_rows': total_rows,
-                'tables_updated': list(total_inserted.keys()),
-                'processing_date': processing_datetime.strftime('%Y%m%d')
-            }
+            lambda_client, CARBONE_LAMBDA_FUNCTION_NAME, all_encounter_ids,
+            metadata={'processing_date': processing_datetime.strftime('%Y%m%d')}
         )
-    else:
-        logger.warning("⚠️  No new records inserted - skipping Carbone trigger")
     
-    logger.info("\n✅ Lambda execution completed successfully")
+    logger.info("\n✅ Lambda execution completed")
     
-    # Return response
     return {
         "statusCode": 200,
         "body": json.dumps({
-            "message": f"Successfully processed {files_processed} file(s)",
-            "processing_date": processing_datetime.strftime('%Y%m%d'),
+            "message": f"Processed {files_processed} file(s) using column_mapping.csv",
             "insertions": total_inserted,
-            "tables": list(total_inserted.keys()),
-            "total_rows": total_rows,
             "encounter_count": len(all_encounter_ids),
-            "encounter_ids": all_encounter_ids[:20],  # Return first 20 IDs
+            "encounter_ids": all_encounter_ids[:20],
             "carbone_triggered": carbone_triggered,
             "timestamp": processing_datetime.isoformat()
         }, indent=2, default=str)

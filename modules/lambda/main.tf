@@ -1,3 +1,6 @@
+# modules/lambda/main.tf
+# CORRECTED VERSION with column_mapping.csv support
+
 # Get current AWS account ID
 data "aws_caller_identity" "current" {}
 
@@ -35,7 +38,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Allow Lambda to read from S3 exports bucket
+# ===== S3 POLICIES =====
+
+# Allow Lambda to read from S3 exports bucket (incoming Excel files)
 resource "aws_iam_role_policy" "lambda_s3_read" {
   name = "${var.project_name}-${var.environment}-lambda-s3-read"
   role = aws_iam_role.lambda_exec_role.id
@@ -58,6 +63,44 @@ resource "aws_iam_role_policy" "lambda_s3_read" {
   })
 }
 
+# ✅ NEW: Allow Lambda to read column_mapping.csv from S3 config folder
+resource "aws_iam_role_policy" "lambda_s3_config_access" {
+  name = "${var.project_name}-${var.environment}-lambda-s3-config"
+  role = aws_iam_role.lambda_exec_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion"
+        ]
+        Resource = [
+          "${var.s3_bucket_arn}/config/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = [
+          var.s3_bucket_arn
+        ]
+        Condition = {
+          StringLike = {
+            "s3:prefix" = ["config/*"]
+          }
+        }
+      }
+    ]
+  })
+}
+
+# ===== SECRETS MANAGER POLICY =====
+
 # Allow Lambda to read the DB credentials secret
 resource "aws_iam_role_policy" "lambda_secret_access" {
   name = "${var.project_name}-${var.environment}-lambda-secret-access"
@@ -76,6 +119,8 @@ resource "aws_iam_role_policy" "lambda_secret_access" {
     ]
   })
 }
+
+# ===== VPC POLICY =====
 
 # Allow Lambda VPC network access
 resource "aws_iam_role_policy" "lambda_vpc_access" {
@@ -100,10 +145,14 @@ resource "aws_iam_role_policy" "lambda_vpc_access" {
   })
 }
 
-# ✅ FIXED: Allow Lambda to invoke Carbone Lambda
+# ===== LAMBDA INVOKE POLICY =====
+
+# ✅ UPDATED: Allow Lambda to invoke Carbone Lambda (conditional)
 resource "aws_iam_role_policy" "lambda_invoke_carbone" {
+  count = var.carbone_lambda_function_name != "" ? 1 : 0
+  
   name = "${var.project_name}-${var.environment}-lambda-invoke-carbone"
-  role = aws_iam_role.lambda_exec_role.id  # ✅ Changed from data_ingestion_lambda_role
+  role = aws_iam_role.lambda_exec_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -113,7 +162,7 @@ resource "aws_iam_role_policy" "lambda_invoke_carbone" {
         Action = [
           "lambda:InvokeFunction"
         ]
-        Resource = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-${var.environment}-carbone-generator"
+        Resource = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${var.carbone_lambda_function_name}"
       }
     ]
   })
@@ -133,12 +182,20 @@ resource "aws_lambda_function" "redcap_excel_processor" {
   timeout          = 300      # 5 minutes
   memory_size      = 1024
 
+  # ✅ UPDATED: Environment variables with column mapping configuration
   environment {
     variables = {
-      CARBONE_LAMBDA_FUNCTION_NAME = "${var.project_name}-${var.environment}-carbone-generator"
-      DB_PROXY_ENDPOINT            = var.db_proxy_endpoint
-      DB_NAME                      = var.db_name
-      SECRET_ARN                   = var.secret_arn
+      # Database configuration
+      DB_PROXY_ENDPOINT = var.db_proxy_endpoint
+      DB_NAME           = var.db_name
+      SECRET_ARN        = var.secret_arn
+      
+      # ✅ Column Mapping CSV Configuration
+      MAPPING_BUCKET    = var.mapping_bucket
+      MAPPING_KEY       = var.mapping_key
+      
+      # ✅ Carbone Lambda Integration
+      CARBONE_LAMBDA_FUNCTION_NAME = var.carbone_lambda_function_name
     }
   }
 

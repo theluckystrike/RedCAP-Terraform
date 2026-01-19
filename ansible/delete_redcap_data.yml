@@ -1,0 +1,63 @@
+---
+- name: Delete all data from RedCap tables (Simple)
+  hosts: localhost
+  gather_facts: false
+  
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    db_host: "{{ lookup('env', 'TF_DB_HOST') }}"
+    db_name: "{{ lookup('env', 'TF_DB_NAME') }}"
+    db_user: "{{ lookup('env', 'TF_DB_USER') }}"
+    db_password: "{{ lookup('env', 'TF_DB_PASS') }}"
+    secret_name: "/redcap/dev/db_credentials"
+
+  tasks:
+    - name: Get DB password from Secrets Manager
+      command: >
+        aws secretsmanager get-secret-value
+        --secret-id {{ secret_name }}
+        --region {{ aws_region }}
+        --query SecretString
+        --output text
+      register: secret_output
+      no_log: true
+
+    - name: Parse password
+      set_fact:
+        db_password: "{{ (secret_output.stdout | from_json).password }}"
+      no_log: true
+
+    - name: Confirm deletion
+      pause:
+        prompt: "⚠️  Delete ALL data from 10 RedCap tables? Type 'DELETE' to confirm"
+      register: confirm
+
+    - name: Abort if not confirmed
+      fail:
+        msg: "Aborted"
+      when: confirm.user_input != 'DELETE'
+
+    - name: Truncate all tables
+      shell: |
+        PGPASSWORD="{{ db_password }}" psql \
+          -h {{ db_host }} \
+          -U {{ db_user }} \
+          -d {{ db_name }} \
+          -p {{ db_port }} \
+          -c "TRUNCATE TABLE {{ item }} CASCADE;"
+      loop:
+        - redcap_form_part_1
+        - redcap_form_part_2
+        - redcap_form_part_3
+        - redcap_form_part_4
+        - redcap_form_part_5
+        - redcap_form_part_6
+        - redcap_form_part_7
+        - redcap_form_part_8
+        - redcap_form_part_9
+        - redcap_form_part_10
+      no_log: true
+
+    - name: Success
+      debug:
+        msg: "✅ All tables truncated successfully"

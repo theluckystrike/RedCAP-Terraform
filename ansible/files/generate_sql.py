@@ -1,5 +1,6 @@
 """
-SQL Schema Generator from Structured JSON
+SQL Schema Generator from Structured JSON - FIXED VERSION
+Fixes: Table name duplication (part_1_part_1) in column_mapping.csv
 Generates normalized PostgreSQL schema with semantic prefixes and proper table organization
 """
 import json
@@ -208,31 +209,32 @@ def split_large_sections(fields, max_fields_per_table=250):
     
     return chunks
 
-def generate_table_sql(table_name, fields, category, part_num=None):
+def generate_table_sql(base_table_name, fields, category, part_num=None):
     """
     Generate CREATE TABLE SQL for a specific table
     
     Args:
-        table_name: Base table name
+        base_table_name: Base table name (without part suffix)
         fields: List of field definitions
         category: Category name (for prefix generation)
         part_num: Part number if table is split (optional)
     
     Returns:
-        SQL CREATE TABLE statement as string
+        Tuple of (SQL statement as string, actual table name used)
     """
     # Adjust table name for multi-part tables
+    actual_table_name = base_table_name
     if part_num is not None:
-        table_name = f"{table_name}_part_{part_num}"
+        actual_table_name = f"{base_table_name}_part_{part_num}"
     
     sql_lines = []
     
     # Table header
-    sql_lines.append(f"-- Table: {table_name}")
+    sql_lines.append(f"-- Table: {actual_table_name}")
     sql_lines.append(f"-- Generated: {datetime.now().isoformat()}")
     sql_lines.append(f"-- Fields: {len(fields)}")
     sql_lines.append("")
-    sql_lines.append(f"CREATE TABLE IF NOT EXISTS {table_name} (")
+    sql_lines.append(f"CREATE TABLE IF NOT EXISTS {actual_table_name} (")
     
     # Primary key
     sql_lines.append("    id SERIAL PRIMARY KEY,")
@@ -280,9 +282,9 @@ def generate_table_sql(table_name, fields, category, part_num=None):
     sql_lines.append("")
     
     # Add indexes
-    sql_lines.append(f"-- Indexes for {table_name}")
-    sql_lines.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_encounter ON {table_name}(encounter_id);")
-    sql_lines.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_created ON {table_name}(created_at);")
+    sql_lines.append(f"-- Indexes for {actual_table_name}")
+    sql_lines.append(f"CREATE INDEX IF NOT EXISTS idx_{actual_table_name}_encounter ON {actual_table_name}(encounter_id);")
+    sql_lines.append(f"CREATE INDEX IF NOT EXISTS idx_{actual_table_name}_created ON {actual_table_name}(created_at);")
     sql_lines.append("")
     
     # Add foreign key constraint (idempotent approach)
@@ -291,10 +293,10 @@ def generate_table_sql(table_name, fields, category, part_num=None):
     sql_lines.append(f"BEGIN")
     sql_lines.append(f"    IF NOT EXISTS (")
     sql_lines.append(f"        SELECT 1 FROM pg_constraint ")
-    sql_lines.append(f"        WHERE conname = 'fk_{table_name}_encounter'")
+    sql_lines.append(f"        WHERE conname = 'fk_{actual_table_name}_encounter'")
     sql_lines.append(f"    ) THEN")
-    sql_lines.append(f"        ALTER TABLE {table_name}")
-    sql_lines.append(f"            ADD CONSTRAINT fk_{table_name}_encounter")
+    sql_lines.append(f"        ALTER TABLE {actual_table_name}")
+    sql_lines.append(f"            ADD CONSTRAINT fk_{actual_table_name}_encounter")
     sql_lines.append(f"            FOREIGN KEY (encounter_id)")
     sql_lines.append(f"            REFERENCES encounters(encounter_id)")
     sql_lines.append(f"            ON DELETE CASCADE;")
@@ -302,7 +304,7 @@ def generate_table_sql(table_name, fields, category, part_num=None):
     sql_lines.append(f"END $$;")
     sql_lines.append("")
     
-    return '\n'.join(sql_lines)
+    return ('\n'.join(sql_lines), actual_table_name)
 
 def generate_encounters_table():
     """
@@ -389,7 +391,7 @@ def generate_schema_from_json(json_path, output_dir):
     Main function to generate SQL schema from structured JSON
     """
     print("="*80)
-    print("SQL SCHEMA GENERATOR")
+    print("SQL SCHEMA GENERATOR (FIXED VERSION)")
     print("="*80)
     print(f"Input: {json_path}")
     print(f"Output: {output_dir}")
@@ -443,11 +445,11 @@ def generate_schema_from_json(json_path, output_dir):
         file_counter = 1
         for section_key, section_data in sections.items():
             section_fields = section_data['fields']
-            table_name = generate_table_name(category_key, section_key)
+            base_table_name = generate_table_name(category_key, section_key)
             
             print(f"    Section: {section_data['display_name']}")
             print(f"      Fields: {len(section_fields)}")
-            print(f"      Table: {table_name}")
+            print(f"      Base Table: {base_table_name}")
             
             # Split if too large
             field_chunks = split_large_sections(section_fields, max_fields_per_table=250)
@@ -457,11 +459,14 @@ def generate_schema_from_json(json_path, output_dir):
             
             for part_idx, chunk in enumerate(field_chunks, 1):
                 part_num = part_idx if len(field_chunks) > 1 else None
-                actual_table_name = f"{table_name}_part_{part_num}" if part_num else table_name
                 
-                # Generate SQL
-                sql = generate_table_sql(actual_table_name, chunk, category_key, 
-                                        part_num if len(field_chunks) > 1 else None)
+                # Generate SQL - now returns tuple (sql, actual_table_name)
+                sql, actual_table_name = generate_table_sql(
+                    base_table_name, 
+                    chunk, 
+                    category_key, 
+                    part_num
+                )
                 
                 # Save to file
                 filename = f"{file_counter:02d}_{actual_table_name}.sql"
@@ -490,8 +495,9 @@ def generate_schema_from_json(json_path, output_dir):
                         'label': field['label']
                     })
                 
+                # FIXED: Use actual_table_name returned from generate_table_sql
                 all_tables_info.append({
-                    'table_name': actual_table_name,
+                    'table_name': actual_table_name,  # This now has the correct name with part suffix
                     'category': category_key,
                     'section': section_key,
                     'field_count': len(chunk),
@@ -527,7 +533,7 @@ def generate_schema_from_json(json_path, output_dir):
 
 # Main execution
 if __name__ == '__main__':
-    json_path = 'structured_form_fields.json'
+    json_path = 'structured_form_fields_updated.json'
     output_dir = 'sql_schema'
     
     version_dir = generate_schema_from_json(json_path, output_dir)
